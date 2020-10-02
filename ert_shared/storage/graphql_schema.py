@@ -8,7 +8,8 @@ from ert_shared.storage.blob_api import BlobApi
 from ert_shared.storage.model import Project as ProjectModel, Ensemble as EnsembleModel, \
     Realization as RealizationModel, Response as ResponseModel, ResponseDefinition as ResponseDefinitionModel, Entities, \
     Observation as ObservationModel, ParameterPrior as ParameterPriorModel, \
-    ObservationResponseDefinitionLink as ObsResDefLinkModel
+    ObservationResponseDefinitionLink as ObsResDefLinkModel, Update as UpdateModel, \
+    ParameterDefinition as ParameterDefinitionModel, Parameter as ParameterModel
 
 engine = create_engine('sqlite:///entities.db', convert_unicode=True)
 
@@ -55,13 +56,33 @@ class Realization(SQLAlchemyObjectType):
 
 
 class Ensemble(SQLAlchemyObjectType):
+    update_source = graphene.String()
+
     class Meta:
         model = EnsembleModel
 
+    def resolve_update_source(self, info):
+        if self.parent is not None:
+            return self.parent.ensemble_reference.name
+        return None
+
+
 
 class Response(SQLAlchemyObjectType):
+    values = graphene.List(graphene.Float)
+    name = graphene.String()
+
     class Meta:
         model = ResponseModel
+        exclude_fields = ('values_ref',)
+
+    def resolve_values(self, info):
+        return fetch_blob_from_ref(self.values_ref)
+
+    def resolve_name(self, info):
+        pd = ResponseDefinition.get_query(info).get(self.response_definition_id)
+        return pd.name
+
 
 
 class ResponseDefinition(SQLAlchemyObjectType):
@@ -88,6 +109,32 @@ class ResponseDefinition(SQLAlchemyObjectType):
 class ParameterPrior(SQLAlchemyObjectType):
     class Meta:
         model = ParameterPriorModel
+
+
+class Update(SQLAlchemyObjectType):
+    class Meta:
+        model = UpdateModel
+
+
+class ParameterDefinition(SQLAlchemyObjectType):
+    class Meta:
+        model = ParameterDefinitionModel
+
+
+class Parameter(SQLAlchemyObjectType):
+    value = graphene.Float()
+    name = graphene.String()
+
+    class Meta:
+        model = ParameterModel
+        exclude_fields = ('value_ref',)
+
+    def resolve_value(self, info):
+        return fetch_blob_from_ref(self.value_ref)
+
+    def resolve_name(self, info):
+        pd = ParameterDefinition.get_query(info).get(self.parameter_definition_id)
+        return pd.name
 
 
 class _ObsResDefLink(SQLAlchemyObjectType):
