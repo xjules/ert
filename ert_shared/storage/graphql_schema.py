@@ -5,23 +5,32 @@ from graphene_sqlalchemy import SQLAlchemyObjectType, SQLAlchemyConnectionField
 
 from ert_shared.storage import connections
 from ert_shared.storage.blob_api import BlobApi
-from ert_shared.storage.model import Project as ProjectModel, Ensemble as EnsembleModel, \
-    Realization as RealizationModel, Response as ResponseModel, ResponseDefinition as ResponseDefinitionModel, Entities, \
-    Observation as ObservationModel, ParameterPrior as ParameterPriorModel, \
-    ObservationResponseDefinitionLink as ObsResDefLinkModel, Update as UpdateModel, \
-    ParameterDefinition as ParameterDefinitionModel, Parameter as ParameterModel
+from ert_shared.storage.model import (
+    Project as ProjectModel,
+    Ensemble as EnsembleModel,
+    Realization as RealizationModel,
+    Response as ResponseModel,
+    ResponseDefinition as ResponseDefinitionModel,
+    Entities,
+    Observation as ObservationModel,
+    ParameterPrior as ParameterPriorModel,
+    ObservationResponseDefinitionLink as ObsResDefLinkModel,
+    Update as UpdateModel,
+    ParameterDefinition as ParameterDefinitionModel,
+    Parameter as ParameterModel,
+)
 
-engine = create_engine('sqlite:///entities.db', convert_unicode=True)
+engine = create_engine("sqlite:///entities.db", convert_unicode=True)
 
-db_session = scoped_session(sessionmaker(autocommit=False,
-                                         autoflush=False,
-                                         bind=engine))
+db_session = scoped_session(
+    sessionmaker(autocommit=False, autoflush=False, bind=engine)
+)
 
 Entities.query = db_session.query_property()
 
 
 def fetch_blob_from_ref(ref):
-    _blob_connection = connections.get_blob_connection('sqlite:///blobs.db')
+    _blob_connection = connections.get_blob_connection("sqlite:///blobs.db")
     blob_api = BlobApi(connection=_blob_connection)
     blob = blob_api.get_blob(ref)
     return blob.data
@@ -35,7 +44,12 @@ class Observation(SQLAlchemyObjectType):
 
     class Meta:
         model = ObservationModel
-        exclude_fields = ('values_ref', 'stds_ref', 'key_indexes_ref', 'data_indexes_ref')
+        exclude_fields = (
+            "values_ref",
+            "stds_ref",
+            "key_indexes_ref",
+            "data_indexes_ref",
+        )
 
     def resolve_values(self, info):
         return fetch_blob_from_ref(self.values_ref)
@@ -55,8 +69,41 @@ class Realization(SQLAlchemyObjectType):
         model = RealizationModel
 
 
+class Response(SQLAlchemyObjectType):
+    values = graphene.List(graphene.Float)
+    name = graphene.String()
+
+    class Meta:
+        model = ResponseModel
+        exclude_fields = ("values_ref",)
+
+    def resolve_values(self, info):
+        return fetch_blob_from_ref(self.values_ref)
+
+    def resolve_name(self, info):
+        pd = ResponseDefinition.get_query(info).get(self.response_definition_id)
+        return pd.name
+
+class Parameter(SQLAlchemyObjectType):
+    value = graphene.Float()
+    name = graphene.String()
+
+    class Meta:
+        model = ParameterModel
+        exclude_fields = ("value_ref",)
+
+    def resolve_value(self, info):
+        return fetch_blob_from_ref(self.value_ref)
+
+    def resolve_name(self, info):
+        pd = ParameterDefinition.get_query(info).get(self.parameter_definition_id)
+        return pd.name
+
 class Ensemble(SQLAlchemyObjectType):
     update_source = graphene.String()
+    response = graphene.List(Response, name=graphene.String(required=True))
+    parameter = graphene.List(Parameter, name=graphene.String(required=True))
+    response_values = graphene.List(graphene.Float, name=graphene.String(required=True))
 
     class Meta:
         model = EnsembleModel
@@ -66,23 +113,43 @@ class Ensemble(SQLAlchemyObjectType):
             return self.parent.ensemble_reference.name
         return None
 
+    def resolve_response(self, info, name=None):
+        if name is not None:
+            response_definitions = ResponseDefinition.get_query(info).filter_by(
+                ensemble_id=self.id, name=name
+            )
+            result = []
+            for response_def in response_definitions:
+                rps = (
+                    Response.get_query(info)
+                    .filter_by(response_definition_id=response_def.id)
+                    .all()
+                )
+                result = result + rps
+            return result
+
+    def resolve_response_values(self, info, name):
+        values = []
+        for r in self.response(info, name):
+            print(dir(r))
+            values = values + r.resolve_values()
+        return values
 
 
-class Response(SQLAlchemyObjectType):
-    values = graphene.List(graphene.Float)
-    name = graphene.String()
-
-    class Meta:
-        model = ResponseModel
-        exclude_fields = ('values_ref',)
-
-    def resolve_values(self, info):
-        return fetch_blob_from_ref(self.values_ref)
-
-    def resolve_name(self, info):
-        pd = ResponseDefinition.get_query(info).get(self.response_definition_id)
-        return pd.name
-
+    def resolve_parameter(self, info, name=None):
+        if name is not None:
+            parameter_definitions = ParameterDefinition.get_query(info).filter_by(
+                ensemble_id=self.id, name=name
+            )
+            result = []
+            for parameter_def in parameter_definitions:
+                pps = (
+                    Parameter.get_query(info)
+                    .filter_by(parameter_definition_id=parameter_def.id)
+                    .all()
+                )
+                result = result + pps
+            return result
 
 
 class ResponseDefinition(SQLAlchemyObjectType):
@@ -91,7 +158,7 @@ class ResponseDefinition(SQLAlchemyObjectType):
 
     class Meta:
         model = ResponseDefinitionModel
-        exclude_fields = ('indexes_ref', 'observation_links')
+        exclude_fields = ("indexes_ref", "observation_links")
 
     def resolve_indexes(self, info):
         return fetch_blob_from_ref(self.indexes_ref)
@@ -121,20 +188,7 @@ class ParameterDefinition(SQLAlchemyObjectType):
         model = ParameterDefinitionModel
 
 
-class Parameter(SQLAlchemyObjectType):
-    value = graphene.Float()
-    name = graphene.String()
 
-    class Meta:
-        model = ParameterModel
-        exclude_fields = ('value_ref',)
-
-    def resolve_value(self, info):
-        return fetch_blob_from_ref(self.value_ref)
-
-    def resolve_name(self, info):
-        pd = ParameterDefinition.get_query(info).get(self.parameter_definition_id)
-        return pd.name
 
 
 class _ObsResDefLink(SQLAlchemyObjectType):
@@ -143,14 +197,22 @@ class _ObsResDefLink(SQLAlchemyObjectType):
 
 
 class Query(graphene.ObjectType):
-    ensemble = graphene.Field(Ensemble, id=graphene.Int(required=True))
+    ensemble = graphene.Field(
+        Ensemble, id=graphene.Int(required=False), name=graphene.String(required=False)
+    )
     all_ensembles = graphene.List(Ensemble)
 
-    def resolve_ensemble(self, info, id=None):
-        return Ensemble.get_query(info).filter_by(id=id).first()
+    def resolve_ensemble(self, info, idx=None, name=None):
+        if idx is not None:
+            return Ensemble.get_query(info).filter_by(id=id).first()
+        elif name is not None:
+            return Ensemble.get_query(info).filter_by(name=name).first()
 
     def resolve_all_ensembles(self, info):
         return Ensemble.get_query(info).all()
 
 
-schema = graphene.Schema(query=Query, types=[Ensemble, Realization, ResponseDefinition, Response, Observation])
+schema = graphene.Schema(
+    query=Query,
+    types=[Ensemble, Realization, ResponseDefinition, Parameter, Response, Observation],
+)
