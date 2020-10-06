@@ -29,6 +29,9 @@ db_session = scoped_session(
 Entities.query = db_session.query_property()
 
 
+data_blob = {}
+
+
 def fetch_blob_from_ref(ref):
     _blob_connection = connections.get_blob_connection("sqlite:///blobs.db")
     blob_api = BlobApi(connection=_blob_connection)
@@ -64,14 +67,10 @@ class Observation(SQLAlchemyObjectType):
         return fetch_blob_from_ref(self.data_indexes_ref)
 
 
-class Realization(SQLAlchemyObjectType):
-    class Meta:
-        model = RealizationModel
-
-
 class Response(SQLAlchemyObjectType):
     values = graphene.List(graphene.Float)
     name = graphene.String()
+    data_ref = graphene.String()
 
     class Meta:
         model = ResponseModel
@@ -83,6 +82,10 @@ class Response(SQLAlchemyObjectType):
     def resolve_name(self, info):
         pd = ResponseDefinition.get_query(info).get(self.response_definition_id)
         return pd.name
+
+    def resolve_data_ref(self, info):
+        return f"/data/{self.values_ref}"
+
 
 class Parameter(SQLAlchemyObjectType):
     value = graphene.Float()
@@ -99,11 +102,53 @@ class Parameter(SQLAlchemyObjectType):
         pd = ParameterDefinition.get_query(info).get(self.parameter_definition_id)
         return pd.name
 
+
+class Realization(SQLAlchemyObjectType):
+    response = graphene.List(Response, name=graphene.String(required=True))
+    response_data_ref = graphene.String(name=graphene.String(required=True))
+    parameter = graphene.List(Parameter, name=graphene.String(required=True))
+    parameter_data_ref = graphene.String(name=graphene.String(required=True))
+
+    class Meta:
+        model = RealizationModel
+
+    def resolve_response(self, info, name=None):
+        response_definition = (
+            ResponseDefinition.get_query(info)
+            .filter_by(ensemble_id=self.ensemble_id, name=name)
+            .first()
+        )
+        return (
+            Response.get_query(info)
+            .filter_by(
+                realization_id=self.id, response_definition_id=response_definition.id
+            )
+            .all()
+        )
+
+    def resolve_parameter(self, info, name=None):
+        parameter_definition = (
+            ParameterDefinition.get_query(info)
+            .filter_by(ensemble_id=self.ensemble_id, name=name)
+            .first()
+        )
+
+        return (
+            Parameter.get_query(info)
+            .filter_by(
+                realization_id=self.id, parameter_definition_id=parameter_definition.id
+            )
+            .all()
+        )
+
+
 class Ensemble(SQLAlchemyObjectType):
     update_source = graphene.String()
     response = graphene.List(Response, name=graphene.String(required=True))
+    response_data_ref = graphene.String(name=graphene.String(required=True))
+
     parameter = graphene.List(Parameter, name=graphene.String(required=True))
-    response_data = graphene.String(name=graphene.String(required=True))
+    parameter_data_ref = graphene.String(name=graphene.String(required=True))
 
     class Meta:
         model = EnsembleModel
@@ -114,37 +159,40 @@ class Ensemble(SQLAlchemyObjectType):
         return None
 
     def resolve_response(self, info, name=None):
-        if name is not None:
-            response_definitions = ResponseDefinition.get_query(info).filter_by(
-                ensemble_id=self.id, name=name
-            )
-            result = []
-            for response_def in response_definitions:
-                rps = (
-                    Response.get_query(info)
-                    .filter_by(response_definition_id=response_def.id)
-                    .all()
-                )
-                result = result + rps
-            return result
+        response_definition = (
+            ResponseDefinition.get_query(info)
+            .filter_by(ensemble_id=self.id, name=name)
+            .first()
+        )
+        return (
+            Response.get_query(info)
+            .filter_by(response_definition_id=response_definition.id)
+            .all()
+        )
 
-    def resolve_response_data(self, info, name):
+    def resolve_response_data_ref(self, info, name):
         return f"/ensembles/{self.id}/responses/{name}/data"
 
+    def resolve_parameter_data_ref(self, info, name):
+        parameter_definition = (
+            ParameterDefinition.get_query(info)
+            .filter_by(ensemble_id=self.id, name=name)
+            .first()
+        )
+        return f"/ensembles/{self.id}/responses/{parameter_definition.id}/data"
+
     def resolve_parameter(self, info, name=None):
-        if name is not None:
-            parameter_definitions = ParameterDefinition.get_query(info).filter_by(
-                ensemble_id=self.id, name=name
-            )
-            result = []
-            for parameter_def in parameter_definitions:
-                pps = (
-                    Parameter.get_query(info)
-                    .filter_by(parameter_definition_id=parameter_def.id)
-                    .all()
-                )
-                result = result + pps
-            return result
+        parameter_definition = (
+            ParameterDefinition.get_query(info)
+            .filter_by(ensemble_id=self.id, name=name)
+            .first()
+        )
+
+        return (
+            Parameter.get_query(info)
+            .filter_by(parameter_definition_id=parameter_definition.id)
+            .all()
+        )
 
 
 class ResponseDefinition(SQLAlchemyObjectType):
@@ -181,9 +229,6 @@ class Update(SQLAlchemyObjectType):
 class ParameterDefinition(SQLAlchemyObjectType):
     class Meta:
         model = ParameterDefinitionModel
-
-
-
 
 
 class _ObsResDefLink(SQLAlchemyObjectType):
