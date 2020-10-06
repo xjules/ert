@@ -103,7 +103,7 @@ class Ensemble(SQLAlchemyObjectType):
     update_source = graphene.String()
     response = graphene.List(Response, name=graphene.String(required=True))
     parameter = graphene.List(Parameter, name=graphene.String(required=True))
-    response_values = graphene.List(graphene.Float, name=graphene.String(required=True))
+    response_data = graphene.String(name=graphene.String(required=True))
 
     class Meta:
         model = EnsembleModel
@@ -128,13 +128,8 @@ class Ensemble(SQLAlchemyObjectType):
                 result = result + rps
             return result
 
-    def resolve_response_values(self, info, name):
-        values = []
-        for r in self.response(info, name):
-            print(dir(r))
-            values = values + r.resolve_values()
-        return values
-
+    def resolve_response_data(self, info, name):
+        return f"/ensembles/{self.id}/responses/{name}/data"
 
     def resolve_parameter(self, info, name=None):
         if name is not None:
