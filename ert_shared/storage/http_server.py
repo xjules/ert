@@ -43,12 +43,25 @@ def resolve_ref_uri(struct, ensemble_id=None):
                 resolve_ref_uri(val, ensemble_id)
 
 
+from flask_graphql import GraphQLView
+from ert_shared.storage.graphql_schema import db_session
+from ert_shared.storage.graphql_schema import schema
+
+
 class FlaskWrapper:
     def __init__(self, rdb_url=None, blob_url=None):
         self._rdb_url = rdb_url
         self._blob_url = blob_url
 
         self.app = flask.Flask("ert http api")
+        self.app.add_url_rule(
+            "/graphql",
+            view_func=GraphQLView.as_view(
+                "graphql",
+                schema=schema,
+                graphiql=True,  # for having the GraphiQL interface
+            ),
+        )
         self.app.add_url_rule("/ensembles", "ensembles", self.ensembles)
         self.app.add_url_rule(
             "/ensembles/<ensemble_id>", "ensemble", self.ensemble_by_id
@@ -99,9 +112,7 @@ class FlaskWrapper:
             methods=["POST"],
         )
         self.app.add_url_rule("/shutdown", "shutdown", self.shutdown, methods=["POST"])
-        self.app.add_url_rule(
-            "/schema.json", "schema", self.schema, methods=["GET"],
-        )
+        self.app.add_url_rule("/schema.json", "schema", self.schema, methods=["GET"])
 
     def schema(self):
         cur_path = os.path.dirname(os.path.abspath(__file__))

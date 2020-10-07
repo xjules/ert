@@ -2,9 +2,11 @@ import graphene
 from sqlalchemy import create_engine
 from sqlalchemy.orm import scoped_session, sessionmaker, Query as ORMQuery
 from graphene_sqlalchemy import SQLAlchemyObjectType, SQLAlchemyConnectionField
+import pandas as pd
 
 from ert_shared.storage import connections
 from ert_shared.storage.blob_api import BlobApi
+from ert_shared.storage.storage_api import StorageApi
 from ert_shared.storage.model import (
     Project as ProjectModel,
     Ensemble as EnsembleModel,
@@ -20,7 +22,10 @@ from ert_shared.storage.model import (
     Parameter as ParameterModel,
 )
 
-engine = create_engine("sqlite:///entities.db", convert_unicode=True)
+rdb_url = "sqlite:///entities.db"
+blob_url = "sqlite:///blobs.db"
+
+engine = create_engine(rdb_url, convert_unicode=True)
 
 db_session = scoped_session(
     sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -33,7 +38,7 @@ data_blob = {}
 
 
 def fetch_blob_from_ref(ref):
-    _blob_connection = connections.get_blob_connection("sqlite:///blobs.db")
+    _blob_connection = connections.get_blob_connection(blob_url)
     blob_api = BlobApi(connection=_blob_connection)
     blob = blob_api.get_blob(ref)
     return blob.data
@@ -68,6 +73,7 @@ class Observation(SQLAlchemyObjectType):
 
 
 class Response(SQLAlchemyObjectType):
+
     values = graphene.List(graphene.Float)
     name = graphene.String()
     data_ref = graphene.String()
@@ -88,6 +94,7 @@ class Response(SQLAlchemyObjectType):
 
 
 class Parameter(SQLAlchemyObjectType):
+
     value = graphene.Float()
     name = graphene.String()
 
@@ -145,7 +152,9 @@ class Realization(SQLAlchemyObjectType):
 class Ensemble(SQLAlchemyObjectType):
     update_source = graphene.String()
     response = graphene.List(Response, name=graphene.String(required=True))
-    response_data_ref = graphene.String(name=graphene.String(required=True))
+    response_data_ref = graphene.String(
+        name=graphene.String(required=True), level=graphene.Int(required=False)
+    )
 
     parameter = graphene.List(Parameter, name=graphene.String(required=True))
     parameter_data_ref = graphene.String(name=graphene.String(required=True))
@@ -170,8 +179,16 @@ class Ensemble(SQLAlchemyObjectType):
             .all()
         )
 
-    def resolve_response_data_ref(self, info, name):
-        return f"/ensembles/{self.id}/responses/{name}/data"
+    def resolve_response_data_ref(self, info, name, level):
+        if level == 0:
+            return f"/ensembles/{self.id}/responses/{name}/data"
+        else:
+            with StorageApi(rdb_url=rdb_url, blob_url=blob_url) as api:
+                ids = api.get_response_data(self.id, name)
+                data_list = [data for data in api.get_data(ids)]
+                df = pd.DataFrame(data=data_list).transpose()
+                # we need to do simplification of df here and store it as temporal blob and provide endpoint
+            return f"/ensembles/{self.id}/responses/{name}/data/{level}"
 
     def resolve_parameter_data_ref(self, info, name):
         parameter_definition = (
