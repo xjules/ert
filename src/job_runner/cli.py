@@ -14,7 +14,13 @@ logger = logging.getLogger(__name__)
 
 
 def _setup_reporters(
-    is_interactive_run, ee_id, evaluator_url, ee_token=None, ee_cert_path=None
+    is_interactive_run,
+    ee_id,
+    evaluator_url,
+    ee_token=None,
+    ee_cert_path=None,
+    experiment_id=None,
+    experiment_url=None,
 ):
     reporters: typing.List[reporting.Report] = []
     if is_interactive_run:
@@ -26,6 +32,14 @@ def _setup_reporters(
                 evaluator_url=evaluator_url, token=ee_token, cert_path=ee_cert_path
             )
         )
+        if experiment_id and experiment_url:
+            reporters.append(
+                reporting.Protobuf(
+                    experiment_url=experiment_url,
+                    token=ee_token,
+                    cert_path=ee_cert_path,
+                )
+            )
     else:
         reporters.append(reporting.File())
     return reporters
@@ -61,6 +75,7 @@ def main(args):
     try:
         with open(JOBS_FILE, "r") as json_file:
             jobs_data = json.load(json_file)
+            experiment_id = jobs_data.get("experiment_id")
             ee_id = jobs_data.get("ee_id")
             ee_token = jobs_data.get("ee_token")
             ee_cert_path = jobs_data.get("ee_cert_path")
@@ -70,7 +85,7 @@ def main(args):
 
     is_interactive_run = len(parsed_args.job) > 0
     reporters = _setup_reporters(
-        is_interactive_run, ee_id, evaluator_url, ee_token, ee_cert_path
+        is_interactive_run, ee_id, evaluator_url, ee_token, ee_cert_path, experiment_id
     )
 
     job_runner = JobRunner(jobs_data)

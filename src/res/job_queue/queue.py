@@ -615,6 +615,8 @@ class JobQueue(BaseCClass):
 
     def add_ensemble_evaluator_information_to_jobs_file(
         self,
+        experiment_id: str,
+        experiment_url: str,
         ee_id: str,
         dispatch_url: str,
         cert: Optional[Union[str, bytes]],
@@ -628,6 +630,8 @@ class JobQueue(BaseCClass):
             with open(f"{q_node.run_path}/{JOBS_FILE}", "r+") as jobs_file:
                 data = json.load(jobs_file)
 
+                data["experiment_id"] = experiment_id
+                data["experiment_url"] = experiment_url
                 data["ee_id"] = ee_id
                 data["real_id"] = self._differ.qindex_to_iens(q_index)
                 data["step_id"] = 0

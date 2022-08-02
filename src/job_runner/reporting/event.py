@@ -16,6 +16,7 @@ from job_runner.reporting.message import (
     _JOB_EXIT_FAILED_STRING,
 )
 from job_runner.reporting.base import Reporter
+from job_runner.reporting.statemachine import StateMachine
 from ert_shared.ensemble_evaluator.client import Client
 
 _FM_JOB_START = "com.equinor.ert.forward_model_job.start"
@@ -30,10 +31,6 @@ _JOB_SOURCE = "source"
 logger = logging.getLogger(__name__)
 
 
-class TransitionError(ValueError):
-    pass
-
-
 class Event(Reporter):
     # pylint: disable=too-many-instance-attributes
     def __init__(self, evaluator_url, token=None, cert_path=None):
@@ -45,13 +42,16 @@ class Event(Reporter):
         else:
             self._cert = None
 
-        self._state = None
+        self._statemachine = StateMachine()
+        self._statemachine.add_handler((Init,), self._init_handler)
+        self._statemachine.add_handler((Start, Running, Exited), self._job_handler)
+        self._statemachine.add_handler((Finish,), self._finished_handler)
+
         self._ee_id = None
         self._real_id = None
         self._step_id = None
         self._event_queue = queue.Queue()
         self._event_publisher_thread = threading.Thread(target=self._publish_event)
-        self._initialize_state_machine()
 
     def _publish_event(self):
         logger.debug("Publishing event.")
@@ -62,42 +62,8 @@ class Event(Reporter):
                     return
                 client.send(to_json(event).decode())
 
-    def _initialize_state_machine(self):
-        logger.debug("Initializing state machines")
-        initialized = (Init,)
-        jobs = (Start, Running, Exited)
-        finished = (Finish,)
-        self._states: dict = {
-            initialized: self._init_handler,
-            jobs: self._job_handler,
-            finished: self._finished_handler,
-        }
-        self._transitions = {
-            None: initialized,
-            initialized: jobs + finished,
-            jobs: jobs + finished,
-        }
-        self._state = None
-
     def report(self, msg):
-        new_state = None
-        for state in self._states:
-            if isinstance(msg, state):
-                new_state = state
-
-        if self._state not in self._transitions or not isinstance(
-            msg, self._transitions[self._state]
-        ):
-            logger.error(
-                f"{msg} illegal state transition: {self._state} -> {new_state}"
-            )
-            raise TransitionError(
-                f"Illegal transition {self._state} -> {new_state} for {msg}, "
-                f"expected to transition into {self._transitions[self._state]}"
-            )
-
-        self._states[new_state](msg)
-        self._state = new_state
+        self._statemachine.transition(msg)
 
     def _dump_event(self, attributes: Dict[str, str], data: Any = None):
         if data is None and _CONTENT_TYPE in attributes:

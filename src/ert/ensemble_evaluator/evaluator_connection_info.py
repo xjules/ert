@@ -24,6 +24,10 @@ class EvaluatorConnectionInfo:
         return f"{self.url}/dispatch"
 
     @property
+    def experiment_ingest_uri(self) -> str:
+        return f"{self.url}/experiment_ingest"
+
+    @property
     def client_uri(self) -> str:
         return f"{self.url}/client"
 

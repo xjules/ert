@@ -214,6 +214,8 @@ class _LegacyEnsemble(_Ensemble):
             # Tell queue to pass info to the jobs-file
             # NOTE: This touches files on disk...
             self._job_queue.add_ensemble_evaluator_information_to_jobs_file(
+                "experiment_id",
+                self._config.get_connection_info().experiment_ingest_uri,
                 self._ee_id,
                 self._config.dispatch_uri,
                 self._config.cert,

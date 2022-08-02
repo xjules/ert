@@ -221,7 +221,8 @@ def test_add_ensemble_evaluator_info(tmpdir):
     os.chdir(tmpdir)
     job_queue = create_local_queue(SIMPLE_SCRIPT)
     ee_id = "some_id"
-    dispatch_url = "wss://some_url.com"
+    dispatch_url = "wss://example.org"
+    experiment_ingest_uri = "wss://example.org/experiment_ingest"
     cert = "My very nice cert"
     token = "my_super_secret_token"
     cert_file = ".ee.pem"
@@ -229,6 +230,8 @@ def test_add_ensemble_evaluator_info(tmpdir):
     for runpath in runpaths:
         (runpath / "jobs.json").write_text(json.dumps({}), encoding="utf-8")
     job_queue.add_ensemble_evaluator_information_to_jobs_file(
+        experiment_id="experiment_id",
+        experiment_url=experiment_ingest_uri,
         ee_id=ee_id,
         dispatch_url=dispatch_url,
         cert=cert,
@@ -250,7 +253,8 @@ def test_add_ensemble_evaluator_info_cert_none(tmpdir):
     os.chdir(tmpdir)
     job_queue = create_local_queue(SIMPLE_SCRIPT)
     ee_id = "some_id"
-    dispatch_url = "wss://some_url.com"
+    dispatch_url = "wss://example.org"
+    experiment_ingest_uri = "wss://example.org/experiment_ingest"
     cert = None
     token = None
     cert_file = ".ee.pem"
@@ -258,6 +262,8 @@ def test_add_ensemble_evaluator_info_cert_none(tmpdir):
     for runpath in runpaths:
         (runpath / "jobs.json").write_text(json.dumps({}), encoding="utf-8")
     job_queue.add_ensemble_evaluator_information_to_jobs_file(
+        experiment_id="experiment_id",
+        experiment_url=experiment_ingest_uri,
         ee_id=ee_id,
         dispatch_url=dispatch_url,
         cert=cert,

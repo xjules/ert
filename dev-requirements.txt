@@ -2,6 +2,7 @@ click
 cmake-format
 decorator
 flake8>=4.0.0
+grpcio-tools
 jsonpath_ng
 jupytext
 pylint

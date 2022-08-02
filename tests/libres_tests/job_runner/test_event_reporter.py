@@ -1,6 +1,9 @@
 import json
 import os
 
+import pytest
+from job_runner.reporting.statemachine import TransitionError
+
 from ..libres_utils import _mock_ws_thread
 
 from job_runner.job import Job
@@ -137,3 +140,17 @@ def test_report_with_failed_finish_message_argument(unused_tcp_port):
         reporter.report(Finish().with_error("massive_failure"))
 
     assert len(lines) == 1
+
+
+def test_report_inconsistent_events(unused_tcp_port):
+    host = "localhost"
+    url = f"ws://{host}:{unused_tcp_port}"
+    reporter = Event(evaluator_url=url)
+
+    lines = []
+    with _mock_ws_thread(host, unused_tcp_port, lines):
+        with pytest.raises(
+            TransitionError,
+            match=r"Illegal transition None -> \(MessageType<Finish>,\)",
+        ):
+            reporter.report(Finish())
