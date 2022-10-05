@@ -33,6 +33,8 @@ class Client:  # pylint: disable=too-many-instance-attributes
         cert: Optional[Union[str, bytes]] = None,
         max_retries=10,
         timeout_multiplier=5,
+        ping_interval=20,
+        ping_timeout=20,
     ) -> None:
         if url is None:
             raise ValueError("url was None")
@@ -58,10 +60,16 @@ class Client:  # pylint: disable=too-many-instance-attributes
         self._timeout_multiplier = timeout_multiplier
         self.websocket: Optional[WebSocketClientProtocol] = None
         self.loop = asyncio.new_event_loop()
+        self._ping_interval = ping_interval
+        self._ping_timeout = ping_timeout
 
     async def get_websocket(self) -> WebSocketClientProtocol:
         return await connect(
-            self.url, ssl=self._ssl_context, extra_headers=self._extra_headers
+            self.url,
+            ssl=self._ssl_context,
+            extra_headers=self._extra_headers,
+            ping_interval=self._ping_interval,
+            ping_timeout=self._ping_timeout,
         )
 
     async def _send(self, msg: AnyStr) -> None:

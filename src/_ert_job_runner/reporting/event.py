@@ -6,6 +6,7 @@ from typing import Any, Dict
 
 from cloudevents.conversion import to_json
 from cloudevents.http import CloudEvent
+from websockets.exceptions import ConnectionClosedError
 
 from _ert_job_runner.client import Client
 from _ert_job_runner.reporting.base import Reporter
@@ -53,15 +54,25 @@ class Event(Reporter):
         self._step_id = None
         self._event_queue = queue.Queue()
         self._event_publisher_thread = threading.Thread(target=self._publish_event)
+        self._sentinel = object()  # notifying the queue's ended
 
     def _publish_event(self):
         logger.debug("Publishing event.")
-        with Client(self._evaluator_url, self._token, self._cert) as client:
+        with Client(
+            url=self._evaluator_url,
+            token=self._token,
+            cert=self._cert,
+            ping_interval=40,
+            ping_timeout=40,
+        ) as client:
             while True:
                 event = self._event_queue.get()
-                if event is None:
-                    return
-                client.send(to_json(event).decode())
+                try:
+                    if event is self._sentinel:
+                        return
+                    client.send(to_json(event).decode())
+                finally:
+                    self._event_queue.task_done()
 
     def report(self, msg):
         self._statemachine.transition(msg)
@@ -140,5 +151,6 @@ class Event(Reporter):
             )
 
     def _finished_handler(self, msg):
-        self._event_queue.put(None)
+        self._event_queue.put(self._sentinel)
+        self._event_queue.join()
         self._event_publisher_thread.join()
