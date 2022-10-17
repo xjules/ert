@@ -1,3 +1,5 @@
+import asyncio
+import collections
 import logging
 import queue
 import threading
@@ -53,8 +55,16 @@ class Event(Reporter):
         self._real_id = None
         self._step_id = None
         self._event_queue = queue.Queue()
+        # the events are being sent from this one
+        self._publish_queue = collections.deque()
         self._event_publisher_thread = threading.Thread(target=self._publish_event)
         self._sentinel = object()  # notifying the queue's ended
+        self._done = asyncio.get_event_loop().create_future()
+
+    async def set_timer(self):
+        await asyncio.sleep(60)
+        if not self._done:
+            self._done.set_result(None)
 
     def _publish_event(self):
         logger.debug("Publishing event.")
@@ -71,8 +81,39 @@ class Event(Reporter):
                     if event is self._sentinel:
                         return
                     client.send(to_json(event).decode())
+                except:
+                    if self._event_queue.empty() or isinstance(event, Exited):
+                        self._event_queue.put(event)
                 finally:
                     self._event_queue.task_done()
+
+    async def _async_publish_event(self):
+        logger.debug("Publishing event.")
+        async with Client(
+            url=self._evaluator_url,
+            token=self._token,
+            cert=self._cert,
+            ping_interval=40,
+            ping_timeout=40,
+        ) as client:
+            while not self._done:
+                await self._append_publish_queue()
+                while self._publish_queue:
+                    try:
+                        await client._send(self._publish_queue[0])
+                        self._publish_queue.popleft()
+                    except:
+                        continue
+
+                    await self._append_publish_queue()
+
+    async def _append_publish_queue(self):
+        while not self._event_queue.empty():
+            event = self._event_queue.get()
+            if event is self._sentinel:
+                asyncio.get_event_loop().create_task(self.set_timer)
+            self._publish_queue.append(event)
+            self._event_queue.task_done()
 
     def report(self, msg):
         self._statemachine.transition(msg)
