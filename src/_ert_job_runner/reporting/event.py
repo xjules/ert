@@ -8,7 +8,7 @@ from typing import Any, Dict
 
 from cloudevents.conversion import to_json
 from cloudevents.http import CloudEvent
-from websockets.exceptions import ConnectionClosedError
+from websockets.exceptions import ConnectionClosed
 
 from _ert_job_runner.client import Client
 from _ert_job_runner.reporting.base import Reporter
@@ -57,14 +57,17 @@ class Event(Reporter):
         self._event_queue = queue.Queue()
         # the events are being sent from this one
         self._publish_queue = collections.deque()
-        self._event_publisher_thread = threading.Thread(target=self._publish_event)
+        # self._event_publisher_thread = threading.Thread(target=self._publish_event)
+        self._event_publisher_future = None
         self._sentinel = object()  # notifying the queue's ended
-        self._done = asyncio.get_event_loop().create_future()
+        # running the publisher queue
+        self._running = asyncio.get_event_loop().create_future()
 
-    async def set_timer(self):
-        await asyncio.sleep(60)
-        if not self._done:
-            self._done.set_result(None)
+    async def _finish_queue_timeout(self, timeout_seconds: float):
+        try:
+            await asyncio.wait_for(self._running, timeout=timeout_seconds)
+        except TimeoutError:
+            self._running.set_result(None)
 
     def _publish_event(self):
         logger.debug("Publishing event.")
@@ -81,37 +84,37 @@ class Event(Reporter):
                     if event is self._sentinel:
                         return
                     client.send(to_json(event).decode())
-                except:
-                    if self._event_queue.empty() or isinstance(event, Exited):
-                        self._event_queue.put(event)
                 finally:
                     self._event_queue.task_done()
 
     async def _async_publish_event(self):
         logger.debug("Publishing event.")
-        async with Client(
+        client = Client(
             url=self._evaluator_url,
             token=self._token,
             cert=self._cert,
             ping_interval=40,
             ping_timeout=40,
-        ) as client:
-            while not self._done:
-                await self._append_publish_queue()
-                while self._publish_queue:
-                    try:
-                        await client._send(self._publish_queue[0])
+        )
+        async for websocket in client:
+            try:
+                while self._running:
+                    await self._update_publish_queue()
+                    while self._publish_queue:
+                        event = self._publish_queue[0]
+                        if event is self._sentinel:
+                            if not self._running.done():
+                                self._running.set_result(None)
+                        websocket.send(to_json(event).decode())
                         self._publish_queue.popleft()
-                    except:
-                        continue
+            except ConnectionClosed:
+                continue
 
-                    await self._append_publish_queue()
-
-    async def _append_publish_queue(self):
+    async def _update_publish_queue(self):
         while not self._event_queue.empty():
             event = self._event_queue.get()
             if event is self._sentinel:
-                asyncio.get_event_loop().create_task(self.set_timer)
+                asyncio.get_event_loop().create_task(self._finish_queue_timeout, 60)
             self._publish_queue.append(event)
             self._event_queue.task_done()
 
@@ -133,7 +136,10 @@ class Event(Reporter):
         self._ens_id = msg.ens_id
         self._real_id = msg.real_id
         self._step_id = msg.step_id
-        self._event_publisher_thread.start()
+        # self._event_publisher_thread.start()
+        self._event_publisher_future = asyncio.run_coroutine_threadsafe(
+            self._async_publish_event, asyncio.get_event_loop()
+        )
 
     def _job_handler(self, msg: Message):
         job_name = msg.job.name()
@@ -194,4 +200,4 @@ class Event(Reporter):
     def _finished_handler(self, msg):
         self._event_queue.put(self._sentinel)
         self._event_queue.join()
-        self._event_publisher_thread.join()
+        # self._event_publisher_thread.join()
