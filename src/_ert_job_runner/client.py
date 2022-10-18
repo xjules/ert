@@ -63,16 +63,6 @@ class Client:  # pylint: disable=too-many-instance-attributes
         self._ping_interval = ping_interval
         self._ping_timeout = ping_timeout
 
-    async def __iter__(self) -> Iterator[WebSocketClientProtocol]:
-        async for websocket in connect(
-            self.url,
-            ssl=self._ssl_context,
-            extra_headers=self._extra_headers,
-            ping_interval=self._ping_interval,
-            ping_timeout=self._ping_timeout,
-        ):
-            yield websocket
-
     async def get_websocket(self) -> WebSocketClientProtocol:
         return await connect(
             self.url,

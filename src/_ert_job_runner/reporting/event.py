@@ -6,6 +6,7 @@ import threading
 from pathlib import Path
 from typing import Any, Dict
 
+import websockets
 from cloudevents.conversion import to_json
 from cloudevents.http import CloudEvent
 from websockets.exceptions import ConnectionClosed
@@ -57,35 +58,20 @@ class Event(Reporter):
         self._event_queue = queue.Queue()
         # the events are being sent from this one
         self._publish_queue = collections.deque()
-        # self._event_publisher_thread = threading.Thread(target=self._publish_event)
         self._event_publisher_future = None
         self._sentinel = object()  # notifying the queue's ended
         # running the publisher queue
-        self._running = asyncio.get_event_loop().create_future()
+        self._loop = asyncio.get_event_loop()
+        self._running = self._loop.create_future()
+        self._finish_task = self._loop.create_future()
 
     async def _finish_queue_timeout(self, timeout_seconds: float):
         try:
-            await asyncio.wait_for(self._running, timeout=timeout_seconds)
+            await asyncio.wait_for(
+                self._running, timeout=timeout_seconds, loop=self._loop
+            )
         except TimeoutError:
             self._running.set_result(None)
-
-    def _publish_event(self):
-        logger.debug("Publishing event.")
-        with Client(
-            url=self._evaluator_url,
-            token=self._token,
-            cert=self._cert,
-            ping_interval=40,
-            ping_timeout=40,
-        ) as client:
-            while True:
-                event = self._event_queue.get()
-                try:
-                    if event is self._sentinel:
-                        return
-                    client.send(to_json(event).decode())
-                finally:
-                    self._event_queue.task_done()
 
     async def _async_publish_event(self):
         logger.debug("Publishing event.")
@@ -96,25 +82,28 @@ class Event(Reporter):
             ping_interval=40,
             ping_timeout=40,
         )
-        async for websocket in client:
-            try:
-                while self._running:
-                    await self._update_publish_queue()
-                    while self._publish_queue:
-                        event = self._publish_queue[0]
-                        if event is self._sentinel:
-                            if not self._running.done():
-                                self._running.set_result(None)
-                        websocket.send(to_json(event).decode())
-                        self._publish_queue.popleft()
-            except ConnectionClosed:
-                continue
+        while True:
+            async with client:
+                try:
+                    while self._running:
+                        await self._update_publish_queue()
+                        while self._publish_queue:
+                            event = self._publish_queue[0]
+                            if event is self._sentinel:
+                                if not self._running.done():
+                                    self._running.set_result(None)
+                            else:
+                                await client._send(to_json(event).decode())
+                            self._publish_queue.popleft()
+                    return
+                except ConnectionClosed:
+                    continue
 
     async def _update_publish_queue(self):
         while not self._event_queue.empty():
             event = self._event_queue.get()
             if event is self._sentinel:
-                asyncio.get_event_loop().create_task(self._finish_queue_timeout, 60)
+                self._finish_task = asyncio.create_task(self._finish_queue_timeout, 60)
             self._publish_queue.append(event)
             self._event_queue.task_done()
 
@@ -138,7 +127,7 @@ class Event(Reporter):
         self._step_id = msg.step_id
         # self._event_publisher_thread.start()
         self._event_publisher_future = asyncio.run_coroutine_threadsafe(
-            self._async_publish_event, asyncio.get_event_loop()
+            self._async_publish_event(), self._loop
         )
 
     def _job_handler(self, msg: Message):
@@ -197,7 +186,14 @@ class Event(Reporter):
                 },
             )
 
+    async def _finish_publisher(self):
+        # await self._running
+        # await self._publish_queue.join()
+        await self._finish_task
+
     def _finished_handler(self, msg):
         self._event_queue.put(self._sentinel)
-        self._event_queue.join()
+        self._loop.run_until_complete(asyncio.wait_for(self._finish_publisher(), 10))
+        # self._loop.run_until_complete(asyncio.wait_for(self._finish_publisher, 10))
+        # self._event_queue.join()
         # self._event_publisher_thread.join()
