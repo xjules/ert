@@ -47,20 +47,27 @@ class LocalDriver(Driver):
 
     def submit(self.job):
         self._job_to_popen_handles[job.id] = subprocess.Popen(executable=job.job_script)  # must return immediately
-        self._statuses[job.id] = JobStatus.SUBMITTED
+        self._statuses[job.id] = JobStatus.RUNNING
 
     def poll_statuses(self):
         for job_id, popen_handle in self._popen_handles:
             return_code = popen_handle.poll()
             if return_code is None:
-                continue
+                self._statuses[job.id] = JobStatus.RUNNING
             elif return_code == 0:
-                self._statuses[job_id] = JobStatus.DONE
+                self._statuses[job.id] = JobStatus.DONE
                 # TODO: fetch stdout/stderr
             else:
-                self._statuses[job_id] = JobStatus.FAILED
+                self._statuses[job.id] = JobStatus.FAILED
                 # TODO: fetch stdout/stderr
 
+    def get_statuses(self):
+        # auto-poll here or not?
+        return self._statuses
+
+    def kill(self, job_id):
+        self._popen_handles[job_id].kill()
+        self._statuses[job_id] = JobStatus.FAILED  # /KILLED?
 class LSFDriver(Driver):
     def __init__():
         self._job_to_lsfid = {}

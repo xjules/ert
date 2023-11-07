@@ -86,8 +86,9 @@ def _queue_state_event_type(state: str) -> str:
     return _queue_state_to_event_type_map[state]
 
 @dataclass
-class ExecutableRealization:
-    status: JobStatus
+class ExecutableRealization: # Aka "Job" or previously "JobQueueNode"
+    # status: JobStatus  # property of the driver
+    id: int
     job_script: pathlib.Path
     num_cpu: int
     status_file: str
