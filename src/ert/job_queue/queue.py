@@ -3,7 +3,7 @@ Module implementing a queue for managing external jobs.
 
 """
 from __future__ import annotations
-
+from dataclasses import dataclass
 import asyncio
 import json
 import logging
@@ -84,51 +84,37 @@ _queue_state_to_event_type_map = {
 def _queue_state_event_type(state: str) -> str:
     return _queue_state_to_event_type_map[state]
 
+@dataclass
+class ExecutableRealization:
+    status: JobStatus
+    job_script: str
+    num_cpu: int
+    status_file: str
+    exit_file: str
+    run_arg: "RunArg"
+    max_runtime: Optional[int] = None
+    callback_timeout: Optional[Callable[[int], None]] = None
+class JobQueue():
+    """Represents a queue of realizations (aka Jobs) to be executed on a
+    cluster."""
 
-class JobQueue(BaseCClass):  # type: ignore
-    TYPE_NAME = "job_queue"
-    _alloc = ResPrototype("void* job_queue_alloc(void*)", bind=False)
-    _free = ResPrototype("void job_queue_free( job_queue )")
-    _add_job = ResPrototype("int job_queue_add_job_node(job_queue, job_queue_node)")
-
-    def __repr__(self) -> str:
-        return f"JobQueue({self.driver}, {self.max_submit})"
-
-    def __str__(self) -> str:
-        return self.__repr__()
-
-    def __init__(self, driver: "Driver", max_submit: int = 2):
-        """
-        Short doc...
-        The @max_submit argument says how many times the job should be submitted
-        (including a failure)
-              max_submit = 2: means that we can submit job once more
-        The @size argument is used to say how many jobs the queue will
-        run, in total.
-        """
-
-        self.job_list: List[JobQueueNode] = []
-        self._stopped = False
-        c_ptr = self._alloc(driver.from_param(driver))
-        super().__init__(c_ptr)
-
+    def __init__(self, driver: "Driver", max_running: int = 0, max_submit: int = 2):
+        self.job_list: List[ExecutableRealization] = []
+        self._queue_stopped = False
         self.driver = driver
         self._differ = QueueDiffer()
         self._max_submit = max_submit
+        self._max_running: int = max_running  # 0 means infinite
         self._pool_sema = BoundedSemaphore(value=CONCURRENT_INTERNALIZATION)
 
-    def get_max_running(self) -> int:
-        return self.driver.get_max_running()
-
-    def set_max_running(self, max_running: int) -> None:
-        self.driver.set_max_running(max_running)
+    @property
+    def max_running(self) -> Optional[int]:
+        return self._max_running
 
     @property
     def max_submit(self) -> int:
         return self._max_submit
 
-    def free(self) -> None:
-        self._free()
 
     def is_active(self) -> bool:
         return any(
