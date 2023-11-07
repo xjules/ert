@@ -1,51 +1,34 @@
 from typing import List, Optional, Tuple
 
-from cwrap import BaseCClass
 
 from ert.config import QueueConfig, QueueSystem
+from queue import ExecutableRealization
 
-from . import ResPrototype
 
-
-class Driver(BaseCClass):  # type: ignore
-    TYPE_NAME = "driver"
-    _alloc = ResPrototype("void* queue_driver_alloc( queue_driver_enum )", bind=False)
-    _free = ResPrototype("void queue_driver_free( driver )")
-    _set_option = ResPrototype("void queue_driver_set_option( driver , char* , char*)")
-    _get_option = ResPrototype("char* queue_driver_get_option(driver, char*)")
+class Driver(ABC):
 
     def __init__(
         self,
         driver_type: QueueSystem,
         options: Optional[List[Tuple[str, str]]] = None,
     ):
-        c_ptr = self._alloc(driver_type)
-        super().__init__(c_ptr)
-        self._max_running = 0
-        self._driver_name = driver_type.name
+        self._driver_type = driver_type
+        self._options = {}
 
         if options:
             for key, value in options:
                 self.set_option(key, value)
 
     def set_option(self, option: str, value: str) -> bool:
-        if option == "MAX_RUNNING":
-            self.set_max_running(int(value) if value else 0)
-            return True
-        else:
-            return self._set_option(option, str(value))
+        self._options.update({option: value})
 
     def get_option(self, option_key: str) -> str:
-        if option_key == "MAX_RUNNING":
-            return str(self.get_max_running())
-        else:
-            return self._get_option(option_key)
+        return self._options[option_key]
 
-    def get_max_running(self) -> int:
-        return self._max_running
+    @abstractmethod
+    def submit(job: ExecutableRealization):
+        pass
 
-    def set_max_running(self, max_running: int) -> None:
-        self._max_running = max_running
 
     @classmethod
     def create_driver(cls, queue_config: QueueConfig) -> "Driver":
@@ -55,9 +38,33 @@ class Driver(BaseCClass):  # type: ignore
                 driver.set_option(*setting)
         return driver
 
-    @property
-    def name(self) -> str:
-        return self._driver_name
 
-    def free(self) -> None:
-        self._free()
+class LocalDriver(Driver):
+    def __init__(self, options):
+        super(QueueSystem.LOCAL, options)
+        self._popen_handles: Dict[int, subprocess.Popen] = {}
+        self._statuses: Dict[int, JobStatus] = {}
+
+    def submit(self.job):
+        self._job_to_popen_handles[job.id] = subprocess.Popen(executable=job.job_script)  # must return immediately
+        self._statuses[job.id] = JobStatus.SUBMITTED
+
+    def poll_statuses(self):
+        for job_id, popen_handle in self._popen_handles:
+            return_code = popen_handle.poll()
+            if return_code is None:
+                continue
+            elif return_code == 0:
+                self._statuses[job_id] = JobStatus.DONE
+                # TODO: fetch stdout/stderr
+            else:
+                self._statuses[job_id] = JobStatus.FAILED
+                # TODO: fetch stdout/stderr
+
+class LSFDriver(Driver):
+    def __init__():
+        self._job_to_lsfid = {}
+
+    def submit(job):
+        lsf_id = subprocess.run(["bsub", job.job_script])
+        self._job_to_lsfid[job.id] = lsf_id

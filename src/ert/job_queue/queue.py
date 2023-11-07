@@ -4,6 +4,7 @@ Module implementing a queue for managing external jobs.
 """
 from __future__ import annotations
 from dataclasses import dataclass
+import pathlib
 import asyncio
 import json
 import logging
@@ -87,7 +88,7 @@ def _queue_state_event_type(state: str) -> str:
 @dataclass
 class ExecutableRealization:
     status: JobStatus
-    job_script: str
+    job_script: pathlib.Path
     num_cpu: int
     status_file: str
     exit_file: str
@@ -98,27 +99,29 @@ class JobQueue():
     """Represents a queue of realizations (aka Jobs) to be executed on a
     cluster."""
 
-    def __init__(self, driver: "Driver", max_running: int = 0, max_submit: int = 2):
+    def __init__(self, driver: "Driver", max_running_jobs: int = 0, resubmits: int = 1):
         self.job_list: List[ExecutableRealization] = []
         self._queue_stopped = False
         self.driver = driver
         self._differ = QueueDiffer()
-        self._max_submit = max_submit
-        self._max_running: int = max_running  # 0 means infinite
+        self._resubmits = resubmits  # How many retries in case a job fails
+
+        self._max_running_jobs: int = max_running_jobs  # 0 means infinite
+        # Not to be confused by max_running for realizations which is in minutes..
+
         self._pool_sema = BoundedSemaphore(value=CONCURRENT_INTERNALIZATION)
 
     @property
-    def max_running(self) -> Optional[int]:
-        return self._max_running
+    def max_running_job(self) -> Optional[int]:
+        return self._max_running_jobs
 
     @property
-    def max_submit(self) -> int:
-        return self._max_submit
-
+    def resubmits(self) -> int:
+        return self._resubmits
 
     def is_active(self) -> bool:
         return any(
-            job.thread_status
+            job.status
             in (ThreadStatus.READY, ThreadStatus.RUNNING, ThreadStatus.STOPPING)
             for job in self.job_list
         )
@@ -194,14 +197,13 @@ class JobQueue():
     def launch_jobs(self, pool_sema: Semaphore) -> None:
         # Start waiting jobs
         while self.available_capacity():
-            job = self.fetch_next_waiting()
-            if job is None:
-                break
-            job.run(
-                driver=self.driver,
-                pool_sema=pool_sema,
-                max_submit=self.max_submit,
-            )
+            if job := self.fetch_next_waiting():
+                driver.submit(job)
+                #job.run(
+                #    driver=self.driver,
+                #    pool_sema=pool_sema,
+                #    max_submit=self.max_submit, # Todo; this should be handled in this class
+                #)
 
     def execute_queue(self, evaluators: Optional[Iterable[Callable[[], None]]]) -> None:
         while self.is_active() and not self.stopped:
@@ -257,7 +259,7 @@ class JobQueue():
         evaluators: List[Callable[..., Any]],
     ) -> None:
         while True:
-            self.launch_jobs(pool_sema)
+            self.launh_jobs(pool_sema)
 
             await asyncio.sleep(1)
 

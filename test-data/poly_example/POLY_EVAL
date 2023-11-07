@@ -1,1 +1,3 @@
 EXECUTABLE poly_eval.py
+
+MAX_RUNNING 1
