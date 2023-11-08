@@ -99,6 +99,9 @@ class ExecutableRealization:  # Aka "Job" or previously "JobQueueNode"
     def __hash__(self):
         return self.run_arg.iens
 
+    def __repr__(self):
+        return str(self.run_arg.iens)
+
 
 class JobQueue:
     """Represents a queue of realizations (aka Jobs) to be executed on a
@@ -120,6 +123,9 @@ class JobQueue:
         self._pool_sema = BoundedSemaphore(value=CONCURRENT_INTERNALIZATION)
         print("we have done jobqueue.__init__")
 
+        self._ens_id = None
+        self._ee_connection = None
+
     @property
     def max_running_job(self) -> Optional[int]:
         return self._max_running_jobs
@@ -130,8 +136,7 @@ class JobQueue:
 
     def is_active(self) -> bool:
         return any(
-            job_status
-            in (JobStatus.WAITING, JobStatus.PENDING, JobStatus.RUNNING)
+            job_status in (JobStatus.WAITING, JobStatus.PENDING, JobStatus.RUNNING)
             for _, job_status in self._statuses.items()
         )
 
@@ -261,6 +266,9 @@ class JobQueue:
         changes: Dict[int, str],
         ee_connection: WebSocketClientProtocol,
     ) -> None:
+        print(ens_id)
+        print(changes)
+        print(ee_connection)
         events = deque(
             [
                 JobQueue._translate_change_to_cloudevent(ens_id, iens, status)
@@ -278,41 +286,69 @@ class JobQueue:
         pool_sema: threading.BoundedSemaphore,
         evaluators: List[Callable[..., Any]],
     ) -> None:
+        self._ens_id = ens_id
+        self._ee_connection = ee_connection
         while True:
             print("_execution_loop_queue_via_websockets")
             await self.launch_jobs(pool_sema)  # Move jobs from WAITING stage
 
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.5)
             print("<heartbeat>")
             for func in evaluators:
                 func()
 
             # Do polling
-            changes, new_state = await self.get_changes_without_transition()
-            print(f"{new_state=}")
+            new_state = await self.get_statuses()  # will not modify self.statuses
+            # This will not work, we may also have state updates from this class, not
+            # only the driver!
+            changes: Dict[int, str] = self._differ.diff_states(
+                self._statuses, new_state
+            )
+            # print(f"{self._statuses=}")
+            # print(f"{new_state=}")
+            # print(f"{changes=}")
             # logically not necessary the way publish changes is implemented at the
             # moment, but highly relevant before, and might be relevant in the
             # future in case publish changes becomes expensive again
             if len(changes) > 0:
-                print("***********************")
-                print(f"we found changes, {changes=}")
+                # print("***********************")
+                # print(f"we found changes, {changes=}")
                 await JobQueue._publish_changes(
                     ens_id,
                     changes,
                     ee_connection,
                 )
-                self._statuses = new_state
+                self._statuses = copy.copy(new_state)
+
+                for job, newstatus in changes.items():
+                    if newstatus == "DONE":
+                        asyncio.create_task(self.handle_done_status(job))
 
             if self.stopped:
-                print("stopped")
+                # print("stopped")
                 raise asyncio.CancelledError
 
             print("are we active?")
             if not self.is_active():
-                print("not active any longer")
+                #print("not active any longer")
+                #for x in range(10):
+                #    await asyncio.sleep(1)
                 break
             print("looping")
 
+    async def handle_done_status(self, job: ExecutableRealization):
+        # MOCKED
+        print(f"Handling DONE status for realization {job}")
+        self._statuses[job] = JobStatus.SUCCESS  # does not work, not hashed the same way!
+        print(self._statuses)
+        # Should we perhaps publish this change here?
+        print("publishing")
+        await JobQueue._publish_changes(
+            self._ens_id,
+            {job: "SUCCESS"},
+            self._ee_connection,
+        )
+        print("have published success")
     async def execute_queue_via_websockets(
         self,
         ee_uri: str,
@@ -474,7 +510,9 @@ class JobQueue:
         """Return the whole state, or None if there was no snapshot."""
         return self._differ.snapshot()
 
-    async def get_changes_without_transition(self) -> Tuple[Dict[int, str], List[JobStatus]]:
+    async def get_changes_without_transition(
+        self,
+    ) -> Tuple[Dict[int, str], List[JobStatus]]:
         old_state = copy.copy(self._statuses)
         # Poll:
         new_state = await self.get_statuses()  # will not modify self.statuses

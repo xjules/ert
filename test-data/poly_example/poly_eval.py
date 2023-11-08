@@ -13,7 +13,7 @@ def _evaluate(coeffs, x):
 
 
 if __name__ == "__main__":
-    time.sleep(10)
+    #time.sleep(3)
     coeffs = _load_coeffs("coeffs.json")
     output = [_evaluate(coeffs, x) for x in range(10)]
     with open("poly.out", "w", encoding="utf-8") as f:
