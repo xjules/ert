@@ -269,6 +269,7 @@ class EnsembleEvaluator:
                 async for msg in websocket:
                     try:
                         event = from_json(msg, data_unmarshaller=evaluator_unmarshaller)
+                        print(event)
                     except cloudevents.exceptions.DataUnmarshallerError:
                         event = from_json(msg, data_unmarshaller=pickle.loads)
                     if self._get_ens_id(event["source"]) != self.ensemble.id_:

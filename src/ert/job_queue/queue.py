@@ -136,6 +136,7 @@ class JobQueue:
         )
 
     def count_status(self, status: JobStatus) -> int:
+        print("count_satus is not impelemented")
         return len([job for job in self.job_list if job.queue_status == status])
 
     @property
@@ -225,7 +226,6 @@ class JobQueue:
                 return
 
     def execute_queue(self, evaluators: Optional[Iterable[Callable[[], None]]]) -> None:
-        print("execute_queue()")
         while self.is_active() and not self.stopped:
             self.launch_jobs(self._pool_sema)
 
@@ -261,7 +261,6 @@ class JobQueue:
         changes: Dict[int, str],
         ee_connection: WebSocketClientProtocol,
     ) -> None:
-        print(f"{changes=}")
         events = deque(
             [
                 JobQueue._translate_change_to_cloudevent(ens_id, iens, status)
@@ -283,20 +282,20 @@ class JobQueue:
             print("_execution_loop_queue_via_websockets")
             await self.launch_jobs(pool_sema)  # Move jobs from WAITING stage
 
-            print("async sleep follows..")
             await asyncio.sleep(1)
             print("<heartbeat>")
             for func in evaluators:
                 func()
 
+            # Do polling
             changes, new_state = await self.get_changes_without_transition()
-            print(new_state)
-            print(changes)
+            print(f"{new_state=}")
             # logically not necessary the way publish changes is implemented at the
             # moment, but highly relevant before, and might be relevant in the
             # future in case publish changes becomes expensive again
             if len(changes) > 0:
-                print("we found changes")
+                print("***********************")
+                print(f"we found changes, {changes=}")
                 await JobQueue._publish_changes(
                     ens_id,
                     changes,
@@ -476,15 +475,12 @@ class JobQueue:
         return self._differ.snapshot()
 
     async def get_changes_without_transition(self) -> Tuple[Dict[int, str], List[JobStatus]]:
-        print(self._statuses)
         old_state = copy.copy(self._statuses)
-
         # Poll:
         new_state = await self.get_statuses()  # will not modify self.statuses
-        print(f"{new_state=}")
+        # print(f"{new_state=}")
         # old_state, new_state = self._differ.get_old_and_new_state(self._statuses)
-
-        return self._differ.diff_states(old_state, new_state), new_state
+        return self._differ.diff_states(self._statuses, new_state), new_state
 
     def add_dispatch_information_to_jobs_file(
         self,
