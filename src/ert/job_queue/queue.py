@@ -161,7 +161,9 @@ class JobQueue:
         # queue_index: int = self._add_job(job)
         print("job_queue.add_job()")
         self.job_list.append(job)  # needed?
+        print(f"adding job {job.run_arg.iens}")
         self._waiting_realizations.put(job)
+        print(f"{self._waiting_realizations.qsize()=}")
         # self._differ.add_state(queue_index, iens, job.queue_status.value)
         return 1
         # return queue_index
@@ -208,20 +210,19 @@ class JobQueue:
         # and ert (through _execute_queue_via_websockets)
 
         # Start waiting jobs
-        print("launching!!!!")
-        if self._waiting_realizations.empty:
-            print("No realizations waiting")
+        if self._waiting_realizations.empty():
             return
 
         while self.available_capacity():
             if job := self._waiting_realizations.get():
                 asyncio.create_task(self.driver.submit(job))
-
                 # job.run(
                 #    driver=self.driver,
                 #    pool_sema=pool_sema,
                 #    max_submit=self.max_submit, # Todo; this should be handled in this class
                 # )
+            if self._waiting_realizations.empty():
+                return
 
     def execute_queue(self, evaluators: Optional[Iterable[Callable[[], None]]]) -> None:
         print("execute_queue()")
@@ -493,8 +494,8 @@ class JobQueue:
         token: Optional[str],
         experiment_id: Optional[str] = None,
     ) -> None:
-        print("yay")
         for job in self.job_list:
+            print(f"prepared jobs.json for real {job.run_arg.iens}")
             cert_path = f"{job.run_arg.runpath}/{CERT_FILE}"
             if cert is not None:
                 with open(cert_path, "w", encoding="utf-8") as cert_file:
