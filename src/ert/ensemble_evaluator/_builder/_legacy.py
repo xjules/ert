@@ -183,11 +183,8 @@ class LegacyEnsemble(Ensemble):
             await cloudevent_unary_send(out_cloudevent)
 
             # Submit all jobs to queue and inform queue when done
-            print(f"{len(self.active_reals)=}")
             for real in self.active_reals:
-                print(f"adding real {real}")
                 self._job_queue.add_realization(real, callback_timeout=on_timeout)
-                print("done adding one")
 
             # TODO: this is sort of a callback being preemptively called.
             # It should be lifted out of the queue/evaluate, into the evaluator. If

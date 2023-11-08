@@ -5,6 +5,7 @@ Module implementing a queue for managing external jobs.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import pathlib
@@ -83,8 +84,9 @@ _queue_state_to_event_type_map = {
 def _queue_state_event_type(state: str) -> str:
     return _queue_state_to_event_type_map[state]
 
+
 @dataclass
-class ExecutableRealization: # Aka "Job" or previously "JobQueueNode"
+class ExecutableRealization:  # Aka "Job" or previously "JobQueueNode"
     # status: JobStatus  # property of the driver
     job_script: pathlib.Path
     num_cpu: int
@@ -94,7 +96,11 @@ class ExecutableRealization: # Aka "Job" or previously "JobQueueNode"
     max_runtime: Optional[int] = None
     callback_timeout: Optional[Callable[[int], None]] = None
 
-class JobQueue():
+    def __hash__(self):
+        return self.run_arg.iens
+
+
+class JobQueue:
     """Represents a queue of realizations (aka Jobs) to be executed on a
     cluster."""
 
@@ -104,6 +110,8 @@ class JobQueue():
 
         self._waiting_realizations: Queue = Queue()
         self._queue_stopped = False
+        self._statuses: Dict[ExecutableRealization, JobStatus] = {}
+
         self._differ = QueueDiffer()
         self._resubmits = resubmits  # How many retries in case a job fails
         self._max_running_jobs: int = max_running_jobs  # 0 means infinite
@@ -122,9 +130,9 @@ class JobQueue():
 
     def is_active(self) -> bool:
         return any(
-            job.status
-            in (ThreadStatus.READY, ThreadStatus.RUNNING, ThreadStatus.STOPPING)
-            for job in self.job_list
+            job_status
+            in (JobStatus.WAITING, JobStatus.PENDING, JobStatus.RUNNING)
+            for _, job_status in self._statuses.items()
         )
 
     def count_status(self, status: JobStatus) -> int:
@@ -132,7 +140,7 @@ class JobQueue():
 
     @property
     def stopped(self) -> bool:
-        return self._stopped
+        return self._queue_stopped
 
     def kill_all_jobs(self) -> None:
         self._stopped = True
@@ -150,12 +158,13 @@ class JobQueue():
         return STATUS_file
 
     def add_job(self, job: ExecutableRealization) -> int:
-        #queue_index: int = self._add_job(job)
+        # queue_index: int = self._add_job(job)
         print("job_queue.add_job()")
-        self.job_list.append(job)
-        #self._differ.add_state(queue_index, iens, job.queue_status.value)
+        self.job_list.append(job)  # needed?
+        self._waiting_realizations.put(job)
+        # self._differ.add_state(queue_index, iens, job.queue_status.value)
         return 1
-        #return queue_index
+        # return queue_index
 
     def count_running(self) -> int:
         return sum(job.thread_status == ThreadStatus.RUNNING for job in self.job_list)
@@ -167,6 +176,7 @@ class JobQueue():
             return self.get_max_running()
 
     def available_capacity(self) -> bool:
+        return True
         return not self.stopped and self.count_running() < self.max_running()
 
     def stop_jobs(self) -> None:
@@ -182,28 +192,36 @@ class JobQueue():
             await asyncio.sleep(1)
 
     def assert_complete(self) -> None:
-        for job in self.job_list:
-            if job.thread_status != ThreadStatus.DONE:
-                msg = (
+        for job, job_status in self._statuses:
+            if job_status != JobStatus.DONE:
+                raise AssertionError(
                     "Unexpected job status type after "
-                    "running job: {} with thread status: {}"
+                    f"running job: {job.run_arg.iens} with JobStatus: {job_status}"
                 )
-                raise AssertionError(msg.format(job.queue_status, job.thread_status))
+
+    async def get_statuses(self) -> Dict["ExecutableRealization", JobStatus]:
+        # This has no side-effects like updating the queues map of statuses
+        return await self.driver.poll_statuses()
 
     async def launch_jobs(self, pool_sema: Semaphore) -> None:
         # This function is used both through everest (through execute_queue)
         # and ert (through _execute_queue_via_websockets)
 
         # Start waiting jobs
+        print("launching!!!!")
+        if self._waiting_realizations.empty:
+            print("No realizations waiting")
+            return
+
         while self.available_capacity():
             if job := self._waiting_realizations.get():
-                await self.driver.submit(job)
+                asyncio.create_task(self.driver.submit(job))
 
-                #job.run(
+                # job.run(
                 #    driver=self.driver,
                 #    pool_sema=pool_sema,
                 #    max_submit=self.max_submit, # Todo; this should be handled in this class
-                #)
+                # )
 
     def execute_queue(self, evaluators: Optional[Iterable[Callable[[], None]]]) -> None:
         print("execute_queue()")
@@ -242,10 +260,11 @@ class JobQueue():
         changes: Dict[int, str],
         ee_connection: WebSocketClientProtocol,
     ) -> None:
+        print(f"{changes=}")
         events = deque(
             [
-                JobQueue._translate_change_to_cloudevent(ens_id, real_id, status)
-                for real_id, status in changes.items()
+                JobQueue._translate_change_to_cloudevent(ens_id, iens, status)
+                for iens, status in changes.items()
             ]
         )
         while events:
@@ -261,30 +280,38 @@ class JobQueue():
     ) -> None:
         while True:
             print("_execution_loop_queue_via_websockets")
-            await self.launch_jobs(pool_sema)
+            await self.launch_jobs(pool_sema)  # Move jobs from WAITING stage
 
+            print("async sleep follows..")
             await asyncio.sleep(1)
-
+            print("<heartbeat>")
             for func in evaluators:
                 func()
 
-            changes, new_state = self.changes_without_transition()
+            changes, new_state = await self.get_changes_without_transition()
+            print(new_state)
+            print(changes)
             # logically not necessary the way publish changes is implemented at the
             # moment, but highly relevant before, and might be relevant in the
             # future in case publish changes becomes expensive again
             if len(changes) > 0:
+                print("we found changes")
                 await JobQueue._publish_changes(
                     ens_id,
                     changes,
                     ee_connection,
                 )
-                self._differ.transition_to_new_state(new_state)
+                self._statuses = new_state
 
             if self.stopped:
+                print("stopped")
                 raise asyncio.CancelledError
 
+            print("are we active?")
             if not self.is_active():
+                print("not active any longer")
                 break
+            print("looping")
 
     async def execute_queue_via_websockets(
         self,
@@ -337,7 +364,7 @@ class JobQueue():
                     )
                 except ConnectionClosed:
                     logger.warning(
-                        "job queue dropped connection to ensemble evaulator - "
+                        "job queue dropped connection to ensemble evaluator - "
                         "going to try and reconnect"
                     )
                     continue
@@ -350,7 +377,11 @@ class JobQueue():
             logger.debug("jobs stopped, re-raising CancelledError")
             raise
 
-        except Exception:
+        except Exception as exc:
+            import traceback
+
+            print(exc)
+            print(traceback.format_exc())
             logger.exception(
                 "unexpected exception in queue",
                 exc_info=True,
@@ -360,7 +391,7 @@ class JobQueue():
             raise
 
         self.assert_complete()
-        self._differ.transition(self.job_list)
+        self._differ.transition(self._statuses)
         # final publish
         async with connect(
             ee_uri,
@@ -400,9 +431,7 @@ class JobQueue():
         real: Realization,  # ensemble_evaluator.Realization
         callback_timeout: Optional[Callable[[int], None]] = None,
     ) -> None:
-        print("HOOI")
         job = ExecutableRealization(
-            #iens=real.run_arg.iens,
             job_script=real.job_script,
             num_cpu=real.num_cpu,
             status_file=self.status_file,
@@ -411,7 +440,6 @@ class JobQueue():
             max_runtime=real.max_runtime,
             callback_timeout=callback_timeout,
         )
-        print(f"{job=}")
         # Everest uses this queue_index?
         real.run_arg.queue_index = self.add_job(job)
 
@@ -446,8 +474,15 @@ class JobQueue():
         """Return the whole state, or None if there was no snapshot."""
         return self._differ.snapshot()
 
-    def changes_without_transition(self) -> Tuple[Dict[int, str], List[JobStatus]]:
-        old_state, new_state = self._differ.get_old_and_new_state(self.job_list)
+    async def get_changes_without_transition(self) -> Tuple[Dict[int, str], List[JobStatus]]:
+        print(self._statuses)
+        old_state = copy.copy(self._statuses)
+
+        # Poll:
+        new_state = await self.get_statuses()  # will not modify self.statuses
+        print(f"{new_state=}")
+        # old_state, new_state = self._differ.get_old_and_new_state(self._statuses)
+
         return self._differ.diff_states(old_state, new_state), new_state
 
     def add_dispatch_information_to_jobs_file(
@@ -458,18 +493,19 @@ class JobQueue():
         token: Optional[str],
         experiment_id: Optional[str] = None,
     ) -> None:
-        for q_index, q_node in enumerate(self.job_list):
-            cert_path = f"{q_node.run_path}/{CERT_FILE}"
+        print("yay")
+        for job in self.job_list:
+            cert_path = f"{job.run_arg.runpath}/{CERT_FILE}"
             if cert is not None:
                 with open(cert_path, "w", encoding="utf-8") as cert_file:
                     cert_file.write(cert)
             with open(
-                f"{q_node.run_path}/{JOBS_FILE}", "r+", encoding="utf-8"
+                f"{job.run_arg.runpath}/{JOBS_FILE}", "r+", encoding="utf-8"
             ) as jobs_file:
                 data = json.load(jobs_file)
 
                 data["ens_id"] = ens_id
-                data["real_id"] = self._differ.qindex_to_iens(q_index)
+                data["real_id"] = job.run_arg.iens
                 data["dispatch_url"] = dispatch_url
                 data["ee_token"] = token
                 data["ee_cert_path"] = cert_path if cert is not None else None

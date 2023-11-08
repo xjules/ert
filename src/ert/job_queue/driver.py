@@ -1,16 +1,16 @@
+import asyncio
+import subprocess
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 from ert.config import QueueConfig, QueueSystem
 from ert.job_queue.job_status import JobStatus
-import subprocess
 
 if TYPE_CHECKING:
     from ert.job_queue import ExecutableRealization
 
 
 class Driver(ABC):
-
     def __init__(
         self,
         driver_type: QueueSystem,
@@ -30,9 +30,12 @@ class Driver(ABC):
         return self._options[option_key]
 
     @abstractmethod
-    def submit(job: "ExecutableRealization"):
+    async def submit(self, job: "ExecutableRealization"):
         pass
 
+    @abstractmethod
+    async def poll_statuses(self):
+        pass
 
     @classmethod
     def create_driver(cls, queue_config: QueueConfig) -> "Driver":
@@ -46,36 +49,50 @@ class Driver(ABC):
 class LocalDriver(Driver):
     def __init__(self, options):
         super().__init__(options)
-        self._popen_handles: Dict[int, subprocess.Popen] = {}
-        self._statuses: Dict[int, JobStatus] = {}
+        self._processes: Dict["ExecutableRealization", asyncio.subprocess.Process] = {}
+        self._statuses: Dict["ExecutableRealization", JobStatus] = {}
 
-    def submit(self, job):
-        self._job_to_popen_handles[job.id] = subprocess.Popen(executable=job.job_script)  # must return immediately
-        self._statuses[job.id] = JobStatus.RUNNING
+    async def submit(self, job):
+        """Submit and *actually (a)wait* for the process to finish."""
+        process = await asyncio.create_subprocess_exec(
+            job.job_script, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=job.run_arg.runpath
+        )
+        if process.returncode is None:
+            self._statuses[job] = JobStatus.RUNNING
+            print("WE ARE RUNNING")
+        else:
+            # Hmm, can it return so fast that we have a zero return code here?
+            raise RuntimeError
+        print(f"Started realization X with pid {process.pid}")
+        self._processes[job] = process
 
-    def poll_statuses(self):
-        for job_id, popen_handle in self._popen_handles:
-            return_code = popen_handle.poll()
-            if return_code is None:
-                self._statuses[job.id] = JobStatus.RUNNING
-            elif return_code == 0:
-                self._statuses[job.id] = JobStatus.DONE
-                # TODO: fetch stdout/stderr
-            else:
-                self._statuses[job.id] = JobStatus.FAILED
-                # TODO: fetch stdout/stderr
+        # Wait for process to finish:
+        output, error = await process.communicate()
+        print(" *** a realization is finished")
+        print(f"{output=}")
+        print(f"{error=}")
+        if process.returncode == 0:
+            self._statuses[job] = JobStatus.DONE
+        else:
+            self._statuses[job] = JobStatus.FAILED
+            # TODO: fetch stdout/stderr
+
+    async def poll_statuses(self):
+        return self._statuses
 
     def get_statuses(self):
         # auto-poll here or not?
         return self._statuses
 
-    def kill(self, job_id):
-        self._popen_handles[job_id].kill()
-        self._statuses[job_id] = JobStatus.FAILED  # /KILLED?
+    def kill(self, job):
+        self._processes[job].kill()
+
+
 class LSFDriver(Driver):
-    def __init__():
+    def __init__(self):
         self._job_to_lsfid = {}
 
-    def submit(job):
-        lsf_id = subprocess.run(["bsub", job.job_script])
-        self._job_to_lsfid[job.id] = lsf_id
+    async def submit(self, job):
+        pass
+        # lsf_id = subprocess.run(["bsub", job.job_script])
+        # self._job_to_lsfid[job.id] = lsf_id

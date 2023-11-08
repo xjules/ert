@@ -37,3 +37,7 @@ class JobStatus(Enum):
     FAILED = auto()
     DO_KILL_NODE_FAILURE = auto()
     UNKNOWN = auto()
+
+
+    def __str__(self):
+        return super().__str__().replace("JobStatus.", "")
