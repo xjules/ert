@@ -1,8 +1,12 @@
-from typing import List, Optional, Tuple
-
+from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING, List, Optional, Tuple
 
 from ert.config import QueueConfig, QueueSystem
-from queue import ExecutableRealization
+from ert.job_queue.job_status import JobStatus
+import subprocess
+
+if TYPE_CHECKING:
+    from ert.job_queue import ExecutableRealization
 
 
 class Driver(ABC):
@@ -26,26 +30,26 @@ class Driver(ABC):
         return self._options[option_key]
 
     @abstractmethod
-    def submit(job: ExecutableRealization):
+    def submit(job: "ExecutableRealization"):
         pass
 
 
     @classmethod
     def create_driver(cls, queue_config: QueueConfig) -> "Driver":
-        driver = Driver(queue_config.queue_system)
-        if queue_config.queue_system in queue_config.queue_options:
-            for setting in queue_config.queue_options[queue_config.queue_system]:
-                driver.set_option(*setting)
-        return driver
+        if queue_config.queue_system == QueueSystem.LOCAL:
+            return LocalDriver(queue_config.queue_options)
+        elif queue_config.queue_system == QueueSystem.LSF:
+            raise LSFDriver(queue_config.queue_options)
+        raise NotImplementedError
 
 
 class LocalDriver(Driver):
     def __init__(self, options):
-        super(QueueSystem.LOCAL, options)
+        super().__init__(options)
         self._popen_handles: Dict[int, subprocess.Popen] = {}
         self._statuses: Dict[int, JobStatus] = {}
 
-    def submit(self.job):
+    def submit(self, job):
         self._job_to_popen_handles[job.id] = subprocess.Popen(executable=job.job_script)  # must return immediately
         self._statuses[job.id] = JobStatus.RUNNING
 

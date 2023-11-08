@@ -2,10 +2,17 @@ import copy
 import logging
 from typing import Dict, List, Tuple
 
-from .job_queue_node import JobQueueNode
+#from .job_queue_node import JobQueueNode
 from .job_status import JobStatus
 
 logger = logging.getLogger(__name__)
+
+
+# For refactoring, we need to figure out if the JobStatus of a realization should
+# be present in the ExecutableRealization aka JobQueueNode object, or should it be a property
+# of the driver, or maintained in a dict in JobQueue mapping from iens to JobStatus
+
+# Do we need this qindex number really?
 
 
 class QueueDiffer:
@@ -19,7 +26,7 @@ class QueueDiffer:
 
     def get_old_and_new_state(
         self,
-        job_list: List[JobQueueNode],
+        job_list: List["ExecutableRealization"],
     ) -> Tuple[List[JobStatus], List[JobStatus]]:
         """Calculate a new state, do not transition, return both old and new state."""
         new_state = [job.queue_status.value for job in job_list]
@@ -31,7 +38,7 @@ class QueueDiffer:
 
     def transition(
         self,
-        job_list: List[JobQueueNode],
+        job_list: List["ExecutableRealization"],
     ) -> Tuple[List[JobStatus], List[JobStatus]]:
         """Transition to a new state, return both old and new state."""
         new_state = [job.queue_status.value for job in job_list]

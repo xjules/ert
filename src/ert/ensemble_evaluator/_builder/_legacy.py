@@ -43,7 +43,7 @@ class LegacyEnsemble(Ensemble):
         if not analysis_config:
             raise ValueError(f"{self} needs analysis_config")
         self._job_queue = JobQueue(
-            Driver.create_driver(queue_config), max_submit=queue_config.max_submit
+            Driver.create_driver(queue_config), resubmits=queue_config.max_submit - 1
         )
         self._analysis_config = analysis_config
         self._config: Optional[EvaluatorServerConfig] = None
@@ -103,6 +103,7 @@ class LegacyEnsemble(Ensemble):
         threading.Thread(target=self._evaluate, name="LegacyEnsemble").start()
 
     def _evaluate(self) -> None:
+        print("_evaluate")
         """
         This method is executed on a separate thread, i.e. in parallel
         with other threads. Its sole purpose is to execute and wait for
@@ -145,6 +146,7 @@ class LegacyEnsemble(Ensemble):
         cloudevent_unary_send: Callable[[CloudEvent], Awaitable[None]],
         experiment_id: Optional[str] = None,
     ) -> None:
+        print("(async) _evaluate_inner")
         """
         This (inner) coroutine does the actual work of evaluating the ensemble. It
         prepares and executes the necessary bookkeeping, prepares and executes
@@ -181,8 +183,11 @@ class LegacyEnsemble(Ensemble):
             await cloudevent_unary_send(out_cloudevent)
 
             # Submit all jobs to queue and inform queue when done
+            print(f"{len(self.active_reals)=}")
             for real in self.active_reals:
+                print(f"adding real {real}")
                 self._job_queue.add_realization(real, callback_timeout=on_timeout)
+                print("done adding one")
 
             # TODO: this is sort of a callback being preemptively called.
             # It should be lifted out of the queue/evaluate, into the evaluator. If

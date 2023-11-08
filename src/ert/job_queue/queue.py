@@ -3,15 +3,17 @@ Module implementing a queue for managing external jobs.
 
 """
 from __future__ import annotations
-from dataclasses import dataclass
-import pathlib
+
 import asyncio
 import json
 import logging
+import pathlib
 import ssl
 import threading
 import time
 from collections import deque
+from dataclasses import dataclass
+from queue import Queue
 from threading import BoundedSemaphore, Semaphore
 from typing import (
     TYPE_CHECKING,
@@ -27,18 +29,14 @@ from typing import (
 
 from cloudevents.conversion import to_json
 from cloudevents.http import CloudEvent
-from cwrap import BaseCClass
 from websockets.client import WebSocketClientProtocol, connect
 from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosed
 
 from ert.constant_filenames import CERT_FILE, JOBS_FILE, ERROR_file, STATUS_file
-from ert.job_queue.job_queue_node import JobQueueNode
 from ert.job_queue.job_status import JobStatus
 from ert.job_queue.queue_differ import QueueDiffer
 from ert.job_queue.thread_status import ThreadStatus
-
-from . import ResPrototype
 
 if TYPE_CHECKING:
     from ert.ensemble_evaluator import Realization
@@ -88,7 +86,6 @@ def _queue_state_event_type(state: str) -> str:
 @dataclass
 class ExecutableRealization: # Aka "Job" or previously "JobQueueNode"
     # status: JobStatus  # property of the driver
-    id: int
     job_script: pathlib.Path
     num_cpu: int
     status_file: str
@@ -96,21 +93,24 @@ class ExecutableRealization: # Aka "Job" or previously "JobQueueNode"
     run_arg: "RunArg"
     max_runtime: Optional[int] = None
     callback_timeout: Optional[Callable[[int], None]] = None
+
 class JobQueue():
     """Represents a queue of realizations (aka Jobs) to be executed on a
     cluster."""
 
     def __init__(self, driver: "Driver", max_running_jobs: int = 0, resubmits: int = 1):
         self.job_list: List[ExecutableRealization] = []
-        self._queue_stopped = False
         self.driver = driver
+
+        self._waiting_realizations: Queue = Queue()
+        self._queue_stopped = False
         self._differ = QueueDiffer()
         self._resubmits = resubmits  # How many retries in case a job fails
-
         self._max_running_jobs: int = max_running_jobs  # 0 means infinite
-        # Not to be confused by max_running for realizations which is in minutes..
 
+        # This one will maybe not be used:
         self._pool_sema = BoundedSemaphore(value=CONCURRENT_INTERNALIZATION)
+        print("we have done jobqueue.__init__")
 
     @property
     def max_running_job(self) -> Optional[int]:
@@ -126,12 +126,6 @@ class JobQueue():
             in (ThreadStatus.READY, ThreadStatus.RUNNING, ThreadStatus.STOPPING)
             for job in self.job_list
         )
-
-    def fetch_next_waiting(self) -> Optional[JobQueueNode]:
-        for job in self.job_list:
-            if job.thread_status == ThreadStatus.READY:
-                return job
-        return None
 
     def count_status(self, status: JobStatus) -> int:
         return len([job for job in self.job_list if job.queue_status == status])
@@ -155,12 +149,13 @@ class JobQueue():
     def status_file(self) -> str:
         return STATUS_file
 
-    def add_job(self, job: JobQueueNode, iens: int) -> int:
-        job.convertToCReference(None)
-        queue_index: int = self._add_job(job)
+    def add_job(self, job: ExecutableRealization) -> int:
+        #queue_index: int = self._add_job(job)
+        print("job_queue.add_job()")
         self.job_list.append(job)
-        self._differ.add_state(queue_index, iens, job.queue_status.value)
-        return queue_index
+        #self._differ.add_state(queue_index, iens, job.queue_status.value)
+        return 1
+        #return queue_index
 
     def count_running(self) -> int:
         return sum(job.thread_status == ThreadStatus.RUNNING for job in self.job_list)
@@ -195,11 +190,15 @@ class JobQueue():
                 )
                 raise AssertionError(msg.format(job.queue_status, job.thread_status))
 
-    def launch_jobs(self, pool_sema: Semaphore) -> None:
+    async def launch_jobs(self, pool_sema: Semaphore) -> None:
+        # This function is used both through everest (through execute_queue)
+        # and ert (through _execute_queue_via_websockets)
+
         # Start waiting jobs
         while self.available_capacity():
-            if job := self.fetch_next_waiting():
-                driver.submit(job)
+            if job := self._waiting_realizations.get():
+                await self.driver.submit(job)
+
                 #job.run(
                 #    driver=self.driver,
                 #    pool_sema=pool_sema,
@@ -207,6 +206,7 @@ class JobQueue():
                 #)
 
     def execute_queue(self, evaluators: Optional[Iterable[Callable[[], None]]]) -> None:
+        print("execute_queue()")
         while self.is_active() and not self.stopped:
             self.launch_jobs(self._pool_sema)
 
@@ -260,7 +260,8 @@ class JobQueue():
         evaluators: List[Callable[..., Any]],
     ) -> None:
         while True:
-            self.launh_jobs(pool_sema)
+            print("_execution_loop_queue_via_websockets")
+            await self.launch_jobs(pool_sema)
 
             await asyncio.sleep(1)
 
@@ -382,7 +383,8 @@ class JobQueue():
         max_runtime: Optional[int],
         num_cpu: int,
     ) -> None:
-        job = JobQueueNode(
+        job = ExecutableRealization(
+            iens=run_arg.iens,
             job_script=job_script,
             num_cpu=num_cpu,
             status_file=self.status_file,
@@ -390,17 +392,17 @@ class JobQueue():
             run_arg=run_arg,
             max_runtime=max_runtime,
         )
-
-        if job is None:
-            return
-        run_arg.queue_index = self.add_job(job, run_arg.iens)
+        # Everest uses this queue_index?
+        run_arg.queue_index = self.add_job(job)
 
     def add_realization(
         self,
-        real: Realization,
+        real: Realization,  # ensemble_evaluator.Realization
         callback_timeout: Optional[Callable[[int], None]] = None,
     ) -> None:
-        job = JobQueueNode(
+        print("HOOI")
+        job = ExecutableRealization(
+            #iens=real.run_arg.iens,
             job_script=real.job_script,
             num_cpu=real.num_cpu,
             status_file=self.status_file,
@@ -409,10 +411,9 @@ class JobQueue():
             max_runtime=real.max_runtime,
             callback_timeout=callback_timeout,
         )
-        if job is None:
-            raise ValueError("JobQueueNode constructor created None job")
-
-        real.run_arg.queue_index = self.add_job(job, real.run_arg.iens)
+        print(f"{job=}")
+        # Everest uses this queue_index?
+        real.run_arg.queue_index = self.add_job(job)
 
     def stop_long_running_jobs(self, minimum_required_realizations: int) -> None:
         completed_jobs = [
