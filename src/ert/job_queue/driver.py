@@ -61,6 +61,8 @@ class LocalDriver(Driver):
         # can recognize and is thus not authorative for JobQueue.
         self._statuses: Dict["ExecutableRealization", JobStatus] = {}
 
+        self._statuspoll_mutex = False
+
     async def submit(self, job):
         """Submit and *actually (a)wait* for the process to finish."""
         process = await asyncio.create_subprocess_exec(
@@ -141,7 +143,12 @@ class LSFDriver(Driver):
         self._statuses[job] = JobStatus.SUBMITTED
         print(f"Submitted job {job} and got LSF JOBID {lsf_id}")
 
-    async def poll_statuses(self):
+    async def poll_statuses(self) -> Dict["ExecutableRealization", JobStatus]:
+        if self._statuspoll_mutex:
+            # Don't repeat if we are called too often.
+            # So easy in async..
+            return self._statuses
+        self._statuspoll_mutex = True
         if not self._job_to_lsfid:
             # We know nothing new yet.
             return self._statuses
@@ -169,6 +176,7 @@ class LSFDriver(Driver):
             self._statuses[self._lsfid_to_job[tokens[0]]] = bjobs_state_to_jobstatus[
                 tokens[2]
             ]
+        self._statuspoll_mutex = False
         return self._statuses
 
     async def kill(self, job):
