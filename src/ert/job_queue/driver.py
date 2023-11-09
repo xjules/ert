@@ -55,7 +55,10 @@ class LocalDriver(Driver):
     async def submit(self, job):
         """Submit and *actually (a)wait* for the process to finish."""
         process = await asyncio.create_subprocess_exec(
-            job.job_script, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=job.run_arg.runpath
+            job.job_script,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=job.run_arg.runpath,
         )
         if process.returncode is None:
             self._statuses[job] = JobStatus.RUNNING

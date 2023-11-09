@@ -14,7 +14,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass
-from queue import Queue
+import queue
 from threading import BoundedSemaphore, Semaphore
 from typing import (
     TYPE_CHECKING,
@@ -97,6 +97,7 @@ class ExecutableRealization:  # Aka "Job" or previously "JobQueueNode"
     callback_timeout: Optional[Callable[[int], None]] = None
 
     def __hash__(self):
+        # Elevate iens up to two levels? Check if it can be removed from run_arg
         return self.run_arg.iens
 
     def __repr__(self):
@@ -109,19 +110,15 @@ class JobQueue:
 
     def __init__(self, driver: "Driver", max_running_jobs: int = 0, resubmits: int = 1):
         self.job_list: List[ExecutableRealization] = []
-        self.driver = driver
+        self.driver = driver  # We should maybe initialize the driver here, not outside.
 
-        self._waiting_realizations: Queue = Queue()
-        self._queue_stopped = False
         self._statuses: Dict[ExecutableRealization, JobStatus] = {}
+        self._waiting_realizations: queue.Queue = queue.Queue()
+        self._queue_stopped = False
 
         self._differ = QueueDiffer()
         self._resubmits = resubmits  # How many retries in case a job fails
         self._max_running_jobs: int = max_running_jobs  # 0 means infinite
-
-        # This one will maybe not be used:
-        self._pool_sema = BoundedSemaphore(value=CONCURRENT_INTERNALIZATION)
-        print("we have done jobqueue.__init__")
 
         self._ens_id = None
         self._ee_connection = None
@@ -175,29 +172,25 @@ class JobQueue:
         # return queue_index
 
     def count_running(self) -> int:
-        return sum(job.thread_status == ThreadStatus.RUNNING for job in self.job_list)
+        return sum(status == JobStatus.RUNNING for status in self._statuses.values)
 
     def max_running(self) -> int:
-        if self.get_max_running() == 0:
+        if self._max_running() == 0:
             return len(self.job_list)
         else:
             return self.get_max_running()
 
     def available_capacity(self) -> bool:
-        return True
-        return not self.stopped and self.count_running() < self.max_running()
+        if self._max_running_jobs == 0:
+            # A value of zero means infinite capacity
+            return True
+        return self.count_running() < self._max_running_jobs
 
-    def stop_jobs(self) -> None:
+    async def stop_jobs(self) -> None:
+        killtasks = []
         for job in self.job_list:
-            job.stop()
-        while self.is_active():
-            time.sleep(1)
-
-    async def stop_jobs_async(self) -> None:
-        for job in self.job_list:
-            job.stop()
-        while self.is_active():
-            await asyncio.sleep(1)
+            killtasks.append(asyncio.create_task(self.driver.kill(job)))
+        await asyncio.gather(killtasks)
 
     def assert_complete(self) -> None:
         for job, job_status in self._statuses:
@@ -209,31 +202,21 @@ class JobQueue:
 
     async def get_statuses(self) -> Dict["ExecutableRealization", JobStatus]:
         # This has no side-effects like updating the queues map of statuses
+        # It only gets from driver, while this class might also update the state.
         return await self.driver.poll_statuses()
 
-    async def launch_jobs(self, pool_sema: Semaphore) -> None:
-        # This function is used both through everest (through execute_queue)
-        # and ert (through _execute_queue_via_websockets)
-
-        # Start waiting jobs
-        if self._waiting_realizations.empty():
-            return
-
+    async def launch_jobs(self) -> None:
+        # Will return without guaranteeing launch succcess,
         while self.available_capacity():
-            if job := self._waiting_realizations.get():
+            try:
+                job = self._waiting_realizations.get(block=False)
                 asyncio.create_task(self.driver.submit(job))
-                # job.run(
-                #    driver=self.driver,
-                #    pool_sema=pool_sema,
-                #    max_submit=self.max_submit, # Todo; this should be handled in this class
-                # )
-            if self._waiting_realizations.empty():
+            except queue.Empty:
                 return
 
     def execute_queue(self, evaluators: Optional[Iterable[Callable[[], None]]]) -> None:
         while self.is_active() and not self.stopped:
-            self.launch_jobs(self._pool_sema)
-
+            self.launch_jobs()
             time.sleep(1)
 
             if evaluators is not None:
@@ -290,7 +273,7 @@ class JobQueue:
         self._ee_connection = ee_connection
         while True:
             print("_execution_loop_queue_via_websockets")
-            await self.launch_jobs(pool_sema)  # Move jobs from WAITING stage
+            await self.launch_jobs()  # Move jobs from WAITING stage
 
             await asyncio.sleep(0.5)
             print("<heartbeat>")
@@ -330,8 +313,8 @@ class JobQueue:
 
             print("are we active?")
             if not self.is_active():
-                #print("not active any longer")
-                #for x in range(10):
+                # print("not active any longer")
+                # for x in range(10):
                 #    await asyncio.sleep(1)
                 break
             print("looping")
@@ -339,16 +322,16 @@ class JobQueue:
     async def handle_done_status(self, job: ExecutableRealization):
         # MOCKED
         print(f"Handling DONE status for realization {job}")
-        self._statuses[job] = JobStatus.SUCCESS  # does not work, not hashed the same way!
+        self._statuses[
+            job
+        ] = JobStatus.SUCCESS  # does not work, not hashed the same way!
         print(self._statuses)
-        # Should we perhaps publish this change here?
-        print("publishing")
         await JobQueue._publish_changes(
             self._ens_id,
             {job: "SUCCESS"},
             self._ee_connection,
         )
-        print("have published success")
+
     async def execute_queue_via_websockets(
         self,
         ee_uri: str,
