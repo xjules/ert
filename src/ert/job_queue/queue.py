@@ -9,13 +9,12 @@ import copy
 import json
 import logging
 import pathlib
+import queue
 import ssl
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass
-import queue
-from threading import BoundedSemaphore, Semaphore
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -37,7 +36,6 @@ from websockets.exceptions import ConnectionClosed
 from ert.constant_filenames import CERT_FILE, JOBS_FILE, ERROR_file, STATUS_file
 from ert.job_queue.job_status import JobStatus
 from ert.job_queue.queue_differ import QueueDiffer
-from ert.job_queue.thread_status import ThreadStatus
 
 if TYPE_CHECKING:
     from ert.ensemble_evaluator import Realization
@@ -132,7 +130,7 @@ class JobQueue:
         return self._resubmits
 
     def is_active(self) -> bool:
-        print(f" <is_active> {self._statuses.values()}")
+        #print(f" <is_active> {self._statuses.values()}")
         return any(
             job_status in (JobStatus.WAITING, JobStatus.PENDING, JobStatus.RUNNING)
             for job_status in self._statuses.values()
@@ -195,11 +193,6 @@ class JobQueue:
                     f"running job: {job.run_arg.iens} with JobStatus: {job_status}"
                 )
 
-    async def get_statuses(self) -> Dict["ExecutableRealization", JobStatus]:
-        # This has no side-effects like updating the queues map of statuses
-        # It only gets from driver, while this class might also update the state.
-        return await self.driver.poll_statuses()
-
     async def launch_jobs(self) -> None:
         # Will return without guaranteeing launch succcess,
         while self.available_capacity():
@@ -238,21 +231,22 @@ class JobQueue:
             },
         )
 
-    @staticmethod
+    @staticmethod  # move to class method
     async def _publish_changes(
         ens_id: str,
         changes: Dict[int, str],
         ee_connection: WebSocketClientProtocol,
     ) -> None:
-        print(ens_id)
-        print(changes)
-        print(ee_connection)
+        #print(ens_id)
+        #print(changes)
+        #print(ee_connection)
         events = deque(
             [
                 JobQueue._translate_change_to_cloudevent(ens_id, iens, status)
                 for iens, status in changes.items()
             ]
         )
+        # rewrite to async for?
         while events:
             await ee_connection.send(to_json(events[0]))
             events.popleft()
@@ -277,7 +271,7 @@ class JobQueue:
                 func()
 
             # Do polling
-            new_state = await self.get_statuses()  # will not modify self.statuses
+            new_state = await self.driver.poll_statuses()
             # This will not work, we may also have state updates from this class, not
             # only the driver!
             changes: Dict[int, str] = self._differ.diff_states(
@@ -492,8 +486,6 @@ class JobQueue:
     async def get_changes_without_transition(
         self,
     ) -> Tuple[Dict[int, str], List[JobStatus]]:
-        old_state = copy.copy(self._statuses)
-        # Poll:
         new_state = await self.get_statuses()  # will not modify self.statuses
         # print(f"{new_state=}")
         # old_state, new_state = self._differ.get_old_and_new_state(self._statuses)
