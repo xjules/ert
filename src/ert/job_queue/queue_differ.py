@@ -47,9 +47,7 @@ class QueueDiffer:
         """
         changes = {}
 
-        if not set(old_state.keys()).issubset(
-            new_state.keys()
-        ):
+        if not set(old_state.keys()).issubset(new_state.keys()):
             print(" <queue_differ> The dictionary of states should not shrink")
             print(f" <queue_differ> {old_state.keys()=} {new_state.keys()=}")
 

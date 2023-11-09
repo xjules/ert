@@ -1,4 +1,6 @@
 import asyncio
+import shlex
+import shutil
 import subprocess
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
@@ -35,6 +37,10 @@ class Driver(ABC):
 
     @abstractmethod
     async def poll_statuses(self):
+        pass
+
+    @abstractmethod
+    async def kill(self, job: "ExecutableRealization"):
         pass
 
     @classmethod
@@ -83,8 +89,15 @@ class LocalDriver(Driver):
     async def poll_statuses(self):
         return self._statuses
 
-    def kill(self, job):
+    async def kill(self, job):
         self._processes[job].kill()
+
+
+bjobs_state_to_jobstatus = {
+    "RUN": JobStatus.RUNNING,
+    "PEND": JobStatus.PENDING,
+    "DONE": JobStatus.DONE,
+}
 
 
 class LSFDriver(Driver):
@@ -92,6 +105,7 @@ class LSFDriver(Driver):
         super().__init__(queue_options)
 
         self._job_to_lsfid: Dict["ExecutableRealization", str] = {}
+        self._lsfid_to_job: Dict[str, "ExecutableRealization"] = {}
         self._submit_processes: Dict[
             "ExecutableRealization", asyncio.subprocess.Process
         ] = {}
@@ -101,29 +115,62 @@ class LSFDriver(Driver):
         self._statuses: Dict["ExecutableRealization", JobStatus] = {}
 
     async def submit(self, job):
-        """Submit and *actually (a)wait* for the process to finish."""
-        print(" <lsfdriver> submit()")
-        print("bsub " + job.job_script)
+        submit_cmd = [
+            "bsub",
+            "-J",
+            f"poly_{job.run_arg.iens}",
+            job.job_script,
+            job.run_arg.runpath,
+        ]
+        assert shutil.which(submit_cmd[0])  # does not propagate back..
         process = await asyncio.create_subprocess_exec(
-            "bsub " + job.job_script,
+            *submit_cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        print(" <lsfdriver> bsub initiated")
         self._submit_processes[job] = process
 
         # Wait for submit process to finish:
         output, error = await process.communicate()
-        print(" <driver> bsub result:")
-        print(output)
-        print(error)
+        # print(output)
+        # print(error)
 
         lsf_id = str(output).split(" ")[1].replace("<", "").replace(">", "")
         self._job_to_lsfid[job] = lsf_id
+        self._lsfid_to_job[lsf_id] = job
+        self._statuses[job] = JobStatus.SUBMITTED
         print(f"Submitted job {job} and got LSF JOBID {lsf_id}")
 
     async def poll_statuses(self):
+        if not self._job_to_lsfid:
+            # We know nothing new yet.
+            return self._statuses
+
+        poll_cmd = ["bjobs"] + list(self._job_to_lsfid.values())
+        print(f"{poll_cmd=}")
+        assert shutil.which(poll_cmd[0])  # does not propagate back..
+        process = await asyncio.create_subprocess_exec(
+            *poll_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        output, error = await process.communicate()
+        for line in output.decode(encoding="utf-8").split("\n"):
+            if "JOBID" in line:
+                continue
+            tokens = shlex.split(
+                line
+            )  # (shlex parsing is actually wrong, positions are fixed)
+            if not tokens:
+                continue
+            if tokens[0] not in self._lsfid_to_job:
+                # A LSF id we know nothing of
+                continue
+            self._statuses[self._lsfid_to_job[tokens[0]]] = bjobs_state_to_jobstatus[
+                tokens[2]
+            ]
         return self._statuses
 
-    def kill(self, job):
+    async def kill(self, job):
+        print(f"would like to kill {job}")
         pass

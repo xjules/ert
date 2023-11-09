@@ -271,7 +271,7 @@ class EnsembleEvaluator:
                         event = from_json(msg, data_unmarshaller=evaluator_unmarshaller)
                     except cloudevents.exceptions.DataUnmarshallerError:
                         event = from_json(msg, data_unmarshaller=pickle.loads)
-                    #print(event)
+                    # print(event)
                     if self._get_ens_id(event["source"]) != self.ensemble.id_:
                         logger.info(
                             "Got event from evaluator "

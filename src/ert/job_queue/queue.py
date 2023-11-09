@@ -130,7 +130,7 @@ class JobQueue:
         return self._resubmits
 
     def is_active(self) -> bool:
-        #print(f" <is_active> {self._statuses.values()}")
+        # print(f" <is_active> {self._statuses.values()}")
         return any(
             job_status in (JobStatus.WAITING, JobStatus.PENDING, JobStatus.RUNNING)
             for job_status in self._statuses.values()
@@ -237,9 +237,9 @@ class JobQueue:
         changes: Dict[int, str],
         ee_connection: WebSocketClientProtocol,
     ) -> None:
-        #print(ens_id)
-        #print(changes)
-        #print(ee_connection)
+        # print(ens_id)
+        # print(changes)
+        # print(ee_connection)
         events = deque(
             [
                 JobQueue._translate_change_to_cloudevent(ens_id, iens, status)
