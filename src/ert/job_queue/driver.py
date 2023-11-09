@@ -62,11 +62,10 @@ class LocalDriver(Driver):
         )
         if process.returncode is None:
             self._statuses[job] = JobStatus.RUNNING
-            print("WE ARE RUNNING")
         else:
             # Hmm, can it return so fast that we have a zero return code here?
             raise RuntimeError
-        print(f"Started realization X with pid {process.pid}")
+        print(f"Started realization {job.run_arg.iens} with pid {process.pid}")
         self._processes[job] = process
 
         # Wait for process to finish:

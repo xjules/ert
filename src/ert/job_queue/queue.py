@@ -132,9 +132,10 @@ class JobQueue:
         return self._resubmits
 
     def is_active(self) -> bool:
+        print(f" <is_active> {self._statuses.values()}")
         return any(
             job_status in (JobStatus.WAITING, JobStatus.PENDING, JobStatus.RUNNING)
-            for _, job_status in self._statuses.items()
+            for job_status in self._statuses.values()
         )
 
     def count_status(self, status: JobStatus) -> int:
@@ -160,16 +161,10 @@ class JobQueue:
     def status_file(self) -> str:
         return STATUS_file
 
-    def add_job(self, job: ExecutableRealization) -> int:
-        # queue_index: int = self._add_job(job)
-        print("job_queue.add_job()")
-        self.job_list.append(job)  # needed?
-        print(f"adding job {job.run_arg.iens}")
+    def add_job(self, job: ExecutableRealization) -> None:
+        self.job_list.append(job)
         self._waiting_realizations.put(job)
-        print(f"{self._waiting_realizations.qsize()=}")
-        # self._differ.add_state(queue_index, iens, job.queue_status.value)
-        return 1
-        # return queue_index
+        self._statuses[job] = JobStatus.WAITING
 
     def count_running(self) -> int:
         return sum(status == JobStatus.RUNNING for status in self._statuses.values)
@@ -274,6 +269,7 @@ class JobQueue:
         while True:
             print("_execution_loop_queue_via_websockets")
             await self.launch_jobs()  # Move jobs from WAITING stage
+            print(f" <exc_loop> {self._statuses.values()}")
 
             await asyncio.sleep(0.5)
             print("<heartbeat>")
@@ -308,16 +304,16 @@ class JobQueue:
                         asyncio.create_task(self.handle_done_status(job))
 
             if self.stopped:
-                # print("stopped")
+                print(" <exc_loop> stopped")
                 raise asyncio.CancelledError
 
-            print("are we active?")
+            print(" <exc_loop> are we active?")
             if not self.is_active():
-                # print("not active any longer")
+                print(" <exc_loop> not active any longer")
                 # for x in range(10):
                 #    await asyncio.sleep(1)
                 break
-            print("looping")
+            print(" <exc_loop> looping")
 
     async def handle_done_status(self, job: ExecutableRealization):
         # MOCKED
@@ -512,7 +508,6 @@ class JobQueue:
         experiment_id: Optional[str] = None,
     ) -> None:
         for job in self.job_list:
-            print(f"prepared jobs.json for real {job.run_arg.iens}")
             cert_path = f"{job.run_arg.runpath}/{CERT_FILE}"
             if cert is not None:
                 with open(cert_path, "w", encoding="utf-8") as cert_file:

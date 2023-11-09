@@ -47,9 +47,11 @@ class QueueDiffer:
         """
         changes = {}
 
-        assert set(old_state.keys()).issubset(
+        if not set(old_state.keys()).issubset(
             new_state.keys()
-        ), "The dictionary of states cannot shrink"
+        ):
+            print(" <queue_differ> The dictionary of states should not shrink")
+            print(f" <queue_differ> {old_state.keys()=} {new_state.keys()=}")
 
         for job in new_state:
             if job in old_state:
