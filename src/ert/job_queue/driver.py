@@ -42,7 +42,7 @@ class Driver(ABC):
         if queue_config.queue_system == QueueSystem.LOCAL:
             return LocalDriver(queue_config.queue_options)
         elif queue_config.queue_system == QueueSystem.LSF:
-            raise LSFDriver(queue_config.queue_options)
+            return LSFDriver(queue_config.queue_options)
         raise NotImplementedError
 
 
@@ -50,6 +50,9 @@ class LocalDriver(Driver):
     def __init__(self, options):
         super().__init__(options)
         self._processes: Dict["ExecutableRealization", asyncio.subprocess.Process] = {}
+
+        # This status map only contains the states that the driver
+        # can recognize and is thus not authorative for JobQueue.
         self._statuses: Dict["ExecutableRealization", JobStatus] = {}
 
     async def submit(self, job):
@@ -70,9 +73,7 @@ class LocalDriver(Driver):
 
         # Wait for process to finish:
         output, error = await process.communicate()
-        print(" *** a realization is finished")
-        print(f"{output=}")
-        print(f"{error=}")
+
         if process.returncode == 0:
             self._statuses[job] = JobStatus.DONE
         else:
@@ -82,19 +83,47 @@ class LocalDriver(Driver):
     async def poll_statuses(self):
         return self._statuses
 
-    def get_statuses(self):
-        # auto-poll here or not?
-        return self._statuses
-
     def kill(self, job):
         self._processes[job].kill()
 
 
 class LSFDriver(Driver):
-    def __init__(self):
-        self._job_to_lsfid = {}
+    def __init__(self, queue_options):
+        super().__init__(queue_options)
+
+        self._job_to_lsfid: Dict["ExecutableRealization", str] = {}
+        self._submit_processes: Dict[
+            "ExecutableRealization", asyncio.subprocess.Process
+        ] = {}
+
+        # This status map only contains the states that the driver
+        # can recognize and is thus not authorative for JobQueue.
+        self._statuses: Dict["ExecutableRealization", JobStatus] = {}
 
     async def submit(self, job):
+        """Submit and *actually (a)wait* for the process to finish."""
+        print(" <lsfdriver> submit()")
+        print("bsub " + job.job_script)
+        process = await asyncio.create_subprocess_exec(
+            "bsub " + job.job_script,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        print(" <lsfdriver> bsub initiated")
+        self._submit_processes[job] = process
+
+        # Wait for submit process to finish:
+        output, error = await process.communicate()
+        print(" <driver> bsub result:")
+        print(output)
+        print(error)
+
+        lsf_id = str(output).split(" ")[1].replace("<", "").replace(">", "")
+        self._job_to_lsfid[job] = lsf_id
+        print(f"Submitted job {job} and got LSF JOBID {lsf_id}")
+
+    async def poll_statuses(self):
+        return self._statuses
+
+    def kill(self, job):
         pass
-        # lsf_id = subprocess.run(["bsub", job.job_script])
-        # self._job_to_lsfid[job.id] = lsf_id
