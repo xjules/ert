@@ -47,16 +47,21 @@ class JobStatus(Enum):
 
 
 class JobStatusMachine(StateMachine):
-    def __init__(self, jobqueue, iens):
+    def __init__(self, jobqueue, iens, retries: int = 1):
         self.jobqueue = jobqueue
-        self.iens = iens
+        self.iens: int = iens
+        self.retries_left: int = retries
         super().__init__()
-
 
     _ = states.States.from_enum(
         JobStatus,
         initial=JobStatus.NOT_ACTIVE,
-        final={JobStatus.SUCCESS, JobStatus.FAILED},
+        final={
+            JobStatus.SUCCESS,
+            JobStatus.FAILED,
+            JobStatus.IS_KILLED,
+            JobStatus.DO_KILL_NODE_FAILURE,
+        },
     )
 
     allocate = _.UNKNOWN.to(_.NOT_ACTIVE)
@@ -67,17 +72,16 @@ class JobStatusMachine(StateMachine):
     start = _.PENDING.to(_.RUNNING)  # from driver
     runend = _.RUNNING.to(_.DONE)  # from driver
     runfail = _.RUNNING.to(_.EXIT)  # from driver
+    retry = _.EXIT.to(_.SUBMITTED)
 
     dokill = _.DO_KILL.from_(_.SUBMITTED, _.PENDING, _.RUNNING)
 
     verify_kill = _.DO_KILL.to(_.IS_KILLED)
 
-    ack_killfailure = _.DO_KILL.to(_.DO_KILL_NODE_FAILURE)
+    ack_killfailure = _.DO_KILL.to(_.DO_KILL_NODE_FAILURE)  # do we want to track this?
 
     validate = _.DONE.to(_.SUCCESS)
     invalidate = _.DONE.to(_.FAILED)
-
-    retry = _.EXIT.to(_.SUBMITTED)
 
     somethingwentwrong = _.UNKNOWN.from_(
         _.NOT_ACTIVE,
@@ -92,19 +96,34 @@ class JobStatusMachine(StateMachine):
 
     donotgohere = _.UNKNOWN.to(_.STATUS_FAILURE)
 
-    def on_submit(self):
+    def on_submit(self, event, state):
         asyncio.create_task(self.jobqueue.driver_submit(self.iens))
+
+    def on_enter_state(self, event, state):
+        if state in [
+            self.SUBMITTED,
+            self.PENDING,
+            self.RUNNING,
+            self.SUCCESS,
+            self.FAILED,
+        ]:
+            asyncio.create_task(self.jobqueue.publish_change(self.iens, state.id))
+
+    def on_enter_EXIT(self):
+        if self.retries_left > 0:
+            self.retry()
+            self.retries_left -= 1
+        else:
+            self.invalidate()
 
     def on_runend(self):
         asyncio.create_task(self.jobqueue.run_done_callback(self.iens))
 
-    def on_transition(self, event, state):
-        print(f"On {event}, from state {state.id} in {self.iens=}")
+    def on_enter_DO_KILL(self):
+        asyncio.create_task(self.jobqueue.driver_kill(self.iens))
 
-    def on_enter_SUCCESS(self):
-        print(f"SUCCESS, {self.iens}")
 
-class JobQueue():
+class JobQueue:
     def __init__(self):
         # Should probably only hand over necessary callbacks...
         self.reals = []
@@ -126,14 +145,24 @@ class JobQueue():
             now += 1
             await self.poll(now)
 
+            if now == 25:
+                # max_runtime says we should kill iens=1
+                self.reals[1].dokill()
             if now > 30:
                 break
+            await asyncio.sleep(0)
         print(self.reals)
 
     async def driver_submit(self, iens):
         print(f"asking the driver to submit {iens=}")
         await asyncio.sleep(0.5)  # Mocking the response time of the cluster
         self.reals[iens].accept()
+
+    async def driver_kill(self, iens):
+        if await asyncio.sleep(0.5):  # Mocking the response time of the cluster
+            self.reals[iens].verify_kill()
+        else:
+            self.reals[iens].ack_killfailure()
 
     async def run_done_callback(self, iens):
         print(f"running done callback for {iens}")
@@ -143,6 +172,10 @@ class JobQueue():
         else:
             self.reals[iens].invalidate()  # failed reading summary or something
 
+    async def publish_change(self, iens, newstate):
+        print(
+            f"sending cloudevent over websocket for {iens=} with new state {newstate}"
+        )
 
     async def poll(self, time):
         if time == 10:
@@ -154,10 +187,10 @@ class JobQueue():
             self.reals[1].runfail()  # mocked driver
             self.reals[2].runend()  # mocked driver
 
+
 async def amain():
     jobqueue = JobQueue()
     await jobqueue.execute_loop()
-
 
 
 if __name__ == "__main__":
