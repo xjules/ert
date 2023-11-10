@@ -1,3 +1,5 @@
+import asyncio
+from statemachine import StateMachine, states
 from enum import Enum, auto
 
 
@@ -8,7 +10,6 @@ class JobStatus(Enum):
 
     WAITING = auto()  # A node which is waiting in the internal queue.
 
-    # Internal status: It has has been submitted - the next status update will
     # (should) place it as pending or running.
     SUBMITTED = auto()
 
@@ -32,11 +33,132 @@ class JobStatus(Enum):
     # The job has been killed, following a DO_KILL - can restart.
     IS_KILLED = auto()
 
+    # Validation went fine:
     SUCCESS = auto()
-    STATUS_FAILURE = auto()
-    FAILED = auto()
-    DO_KILL_NODE_FAILURE = auto()
+
+    STATUS_FAILURE = auto()  # Temporary failure, should not be a reachable state
+
+    FAILED = auto()  # No more retries
+    DO_KILL_NODE_FAILURE = auto()  # Compute node should be blocked
     UNKNOWN = auto()
 
     def __str__(self):
         return super().__str__().replace("JobStatus.", "")
+
+
+class JobStatusMachine(StateMachine):
+    def __init__(self, jobqueue, iens):
+        self.jobqueue = jobqueue
+        self.iens = iens
+        super().__init__()
+
+
+    _ = states.States.from_enum(
+        JobStatus,
+        initial=JobStatus.NOT_ACTIVE,
+        final={JobStatus.SUCCESS, JobStatus.FAILED},
+    )
+
+    allocate = _.UNKNOWN.to(_.NOT_ACTIVE)
+
+    activate = _.NOT_ACTIVE.to(_.WAITING)
+    submit = _.WAITING.to(_.SUBMITTED)  # from jobqueue
+    accept = _.SUBMITTED.to(_.PENDING)  # from driver
+    start = _.PENDING.to(_.RUNNING)  # from driver
+    runend = _.RUNNING.to(_.DONE)  # from driver
+    runfail = _.RUNNING.to(_.EXIT)  # from driver
+
+    dokill = _.DO_KILL.from_(_.SUBMITTED, _.PENDING, _.RUNNING)
+
+    verify_kill = _.DO_KILL.to(_.IS_KILLED)
+
+    ack_killfailure = _.DO_KILL.to(_.DO_KILL_NODE_FAILURE)
+
+    validate = _.DONE.to(_.SUCCESS)
+    invalidate = _.DONE.to(_.FAILED)
+
+    retry = _.EXIT.to(_.SUBMITTED)
+
+    somethingwentwrong = _.UNKNOWN.from_(
+        _.NOT_ACTIVE,
+        _.WAITING,
+        _.SUBMITTED,
+        _.PENDING,
+        _.RUNNING,
+        _.DONE,
+        _.EXIT,
+        _.DO_KILL,
+    )
+
+    donotgohere = _.UNKNOWN.to(_.STATUS_FAILURE)
+
+    def on_submit(self):
+        asyncio.create_task(self.jobqueue.driver_submit(self.iens))
+
+    def on_runend(self):
+        asyncio.create_task(self.jobqueue.run_done_callback(self.iens))
+
+    def on_transition(self, event, state):
+        print(f"On {event}, from state {state.id} in {self.iens=}")
+
+    def on_enter_SUCCESS(self):
+        print(f"SUCCESS, {self.iens}")
+
+class JobQueue():
+    def __init__(self):
+        # Should probably only hand over necessary callbacks...
+        self.reals = []
+        for iens in range(3):
+            self.reals.append(JobStatusMachine(self, iens=iens))
+
+    async def execute_loop(self):
+        for real in self.reals:
+            real.activate()
+
+        for real in self.reals:
+            real.submit()
+
+        now = 0
+        while True:
+            # our execution loop
+            print(f"{now=}")
+            await asyncio.sleep(0.1)
+            now += 1
+            await self.poll(now)
+
+            if now > 30:
+                break
+        print(self.reals)
+
+    async def driver_submit(self, iens):
+        print(f"asking the driver to submit {iens=}")
+        await asyncio.sleep(0.5)  # Mocking the response time of the cluster
+        self.reals[iens].accept()
+
+    async def run_done_callback(self, iens):
+        print(f"running done callback for {iens}")
+        await asyncio.sleep(0.2)  # slow summary file reading..
+        if iens < 1:
+            self.reals[iens].validate()
+        else:
+            self.reals[iens].invalidate()  # failed reading summary or something
+
+
+    async def poll(self, time):
+        if time == 10:
+            self.reals[0].start()  # mocked driver
+            self.reals[1].start()  # mocked driver
+            self.reals[2].start()  # mocked driver
+        if time == 20:
+            self.reals[0].runend()  # mocked driver
+            self.reals[1].runfail()  # mocked driver
+            self.reals[2].runend()  # mocked driver
+
+async def amain():
+    jobqueue = JobQueue()
+    await jobqueue.execute_loop()
+
+
+
+if __name__ == "__main__":
+    asyncio.run(amain())
