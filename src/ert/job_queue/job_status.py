@@ -1,8 +1,8 @@
 import asyncio
 from enum import Enum, auto
 
-from statemachine import StateMachine, states
-from transitions import Machine
+# from statemachine import StateMachine, states
+# from transitions import Machine
 from transitions.extensions.asyncio import AsyncMachine
 
 
@@ -50,35 +50,71 @@ class JobStatus(Enum):
 
 
 transitions = [
-    ["activate", JobStatus.NOT_ACTIVE, JobStatus.WAITING],
+    {
+        "trigger": "activate",
+        "source": JobStatus.NOT_ACTIVE,
+        "dest": JobStatus.WAITING,
+    },
     {
         "trigger": "submit",
         "source": JobStatus.WAITING,
         "dest": JobStatus.SUBMITTED,
-        "before": "on_submit",
+        "after": "on_submit",
     },
-    ["allocate", JobStatus.UNKNOWN, JobStatus.NOT_ACTIVE],
-    ["accept", JobStatus.SUBMITTED, JobStatus.PENDING],  # from driver
-    ["start", JobStatus.PENDING, JobStatus.RUNNING],  # from driver
-    ["runend", JobStatus.RUNNING, JobStatus.DONE],  # from driver
-    ["runfail", JobStatus.RUNNING, JobStatus.EXIT],  # from driver
-    ["retry", JobStatus.EXIT, JobStatus.SUBMITTED],
-    [
-        "dokill",
-        [JobStatus.SUBMITTED, JobStatus.PENDING, JobStatus.RUNNING],
-        JobStatus.DO_KILL,
-    ],
-    ["verify_kill", JobStatus.DO_KILL, JobStatus.IS_KILLED],
-    [
-        "ack_killfailure",
-        JobStatus.DO_KILL,
-        JobStatus.DO_KILL_NODE_FAILURE,
-    ],  # do we want to track this?
-    ["validate", JobStatus.DONE, JobStatus.SUCCESS],
-    ["invalidate", JobStatus.DONE, JobStatus.FAILED],
-    [
-        "somethingwentwrong",
-        [
+    {
+        "trigger": "pc",
+        "source": [
+            JobStatus.SUBMITTED,
+            JobStatus.PENDING,
+            JobStatus.RUNNING,
+            JobStatus.SUCCESS,
+            JobStatus.FAILED,
+        ],
+        "dest": "*",
+        "after": "publish_changes",
+    },
+    {"trigger": "allocate", "source": JobStatus.UNKNOWN, "dest": JobStatus.NOT_ACTIVE},
+    {
+        "trigger": "accept",
+        "source": JobStatus.SUBMITTED,
+        "dest": JobStatus.PENDING,
+    },  # from driver
+    {
+        "trigger": "start",
+        "source": JobStatus.PENDING,
+        "dest": JobStatus.RUNNING,
+    },  # from driver
+    {
+        "trigger": "runend",
+        "source": JobStatus.RUNNING,
+        "dest": JobStatus.DONE,
+    },  # from driver
+    {
+        "trigger": "runfail",
+        "source": JobStatus.RUNNING,
+        "dest": JobStatus.EXIT,
+    },  # from driver
+    {"trigger": "retry", "source": JobStatus.EXIT, "dest": JobStatus.SUBMITTED},
+    {
+        "trigger": "dokill",
+        "source": [JobStatus.SUBMITTED, JobStatus.PENDING, JobStatus.RUNNING],
+        "dest": JobStatus.DO_KILL,
+    },
+    {
+        "trigger": "verify_kill",
+        "source": JobStatus.DO_KILL,
+        "dest": JobStatus.IS_KILLED,
+    },
+    {
+        "trigger": "ack_killfailure",
+        "source": JobStatus.DO_KILL,
+        "dest": JobStatus.DO_KILL_NODE_FAILURE,
+    },  # do we want to track this?
+    {"trigger": "validate", "source": JobStatus.DONE, "dest": JobStatus.SUCCESS},
+    {"trigger": "invalidate", "source": JobStatus.DONE, "dest": JobStatus.FAILED},
+    {
+        "trigger": "somethingwentwrong",
+        "source": [
             JobStatus.NOT_ACTIVE,
             JobStatus.WAITING,
             JobStatus.SUBMITTED,
@@ -88,9 +124,13 @@ transitions = [
             JobStatus.EXIT,
             JobStatus.DO_KILL,
         ],
-        JobStatus.UNKNOWN,
-    ],
-    ["donotgohere", JobStatus.UNKNOWN, JobStatus.STATUS_FAILURE],
+        "dest": JobStatus.UNKNOWN,
+    },
+    {
+        "trigger": "donotgohere",
+        "source": JobStatus.UNKNOWN,
+        "dest": JobStatus.STATUS_FAILURE,
+    },
 ]
 
 
@@ -106,108 +146,37 @@ class JobStatusModel:
             initial=JobStatus.NOT_ACTIVE,
         )
 
-    async def on_submit(self, event, state):
-        self.jobqueue.driver_submit(self.iens)
+    async def on_submit(self):
+        print(f"submitting job to driver {self.iens}")
+        await self.jobqueue.driver_submit(self.iens)
 
-    async def on_enter_state(self, event, state):
-        if state in [
-            self.SUBMITTED,
-            self.PENDING,
-            self.RUNNING,
-            self.SUCCESS,
-            self.FAILED,
-        ]:
-            self.jobqueue.publish_change(self.iens, state.id)
+    async def on_enter_SUBMITTED(self):
+        await self.jobqueue.publish_change(self.iens, self.state)
+
+    async def on_enter_PENDING(self):
+        await self.jobqueue.publish_change(self.iens, self.state)
+
+    async def on_enter_RUNNING(self):
+        await self.jobqueue.publish_change(self.iens, self.state)
+
+    async def on_enter_SUCCESS(self):
+        await self.jobqueue.publish_change(self.iens, self.state)
+
+    async def on_enter_FAILED(self):
+        await self.jobqueue.publish_change(self.iens, self.state)
 
     async def on_enter_EXIT(self):
         if self.retries_left > 0:
-            self.retry()
+            await self.retry()
             self.retries_left -= 1
         else:
-            self.invalidate()
+            await self.invalidate()
 
     async def on_runend(self):
-        self.jobqueue.run_done_callback(self.iens)
+        await self.jobqueue.run_done_callback(self.iens)
 
     async def on_enter_DO_KILL(self):
-        self.jobqueue.driver_kill(self.iens)
-
-
-class JobStatusMachine(StateMachine):
-    def __init__(self, jobqueue, iens, retries: int = 1):
-        self.jobqueue = jobqueue
-        self.iens: int = iens
-        self.retries_left: int = retries
-        super().__init__()
-
-    _ = states.States.from_enum(
-        JobStatus,
-        initial=JobStatus.NOT_ACTIVE,
-        final={
-            JobStatus.SUCCESS,
-            JobStatus.FAILED,
-            JobStatus.IS_KILLED,
-            JobStatus.DO_KILL_NODE_FAILURE,
-        },
-    )
-
-    allocate = _.UNKNOWN.to(_.NOT_ACTIVE)
-
-    activate = _.NOT_ACTIVE.to(_.WAITING)
-    submit = _.WAITING.to(_.SUBMITTED)  # from jobqueue
-    accept = _.SUBMITTED.to(_.PENDING)  # from driver
-    start = _.PENDING.to(_.RUNNING)  # from driver
-    runend = _.RUNNING.to(_.DONE)  # from driver
-    runfail = _.RUNNING.to(_.EXIT)  # from driver
-    retry = _.EXIT.to(_.SUBMITTED)
-
-    dokill = _.DO_KILL.from_(_.SUBMITTED, _.PENDING, _.RUNNING)
-
-    verify_kill = _.DO_KILL.to(_.IS_KILLED)
-
-    ack_killfailure = _.DO_KILL.to(_.DO_KILL_NODE_FAILURE)  # do we want to track this?
-
-    validate = _.DONE.to(_.SUCCESS)
-    invalidate = _.DONE.to(_.FAILED)
-
-    somethingwentwrong = _.UNKNOWN.from_(
-        _.NOT_ACTIVE,
-        _.WAITING,
-        _.SUBMITTED,
-        _.PENDING,
-        _.RUNNING,
-        _.DONE,
-        _.EXIT,
-        _.DO_KILL,
-    )
-
-    donotgohere = _.UNKNOWN.to(_.STATUS_FAILURE)
-
-    def on_submit(self, event, state):
-        asyncio.create_task(self.jobqueue.driver_submit(self.iens))
-
-    def on_enter_state(self, event, state):
-        if state in [
-            self.SUBMITTED,
-            self.PENDING,
-            self.RUNNING,
-            self.SUCCESS,
-            self.FAILED,
-        ]:
-            asyncio.create_task(self.jobqueue.publish_change(self.iens, state.id))
-
-    def on_enter_EXIT(self):
-        if self.retries_left > 0:
-            self.retry()
-            self.retries_left -= 1
-        else:
-            self.invalidate()
-
-    def on_runend(self):
-        asyncio.create_task(self.jobqueue.run_done_callback(self.iens))
-
-    def on_enter_DO_KILL(self):
-        asyncio.create_task(self.jobqueue.driver_kill(self.iens))
+        await self.jobqueue.driver_kill(self.iens)
 
 
 class JobQueue:
@@ -215,14 +184,14 @@ class JobQueue:
         # Should probably only hand over necessary callbacks...
         self.reals = []
         for iens in range(3):
-            self.reals.append(JobStatusMachine(self, iens=iens))
+            self.reals.append(JobStatusModel(self, iens=iens))
 
     async def execute_loop(self):
         for real in self.reals:
-            real.activate()
+            await real.activate()
 
         for real in self.reals:
-            real.submit()
+            await real.submit()
 
         now = 0
         while True:
@@ -234,7 +203,7 @@ class JobQueue:
 
             if now == 25:
                 # max_runtime says we should kill iens=1
-                self.reals[1].dokill()
+                await self.reals[1].dokill()
             if now > 30:
                 break
             await asyncio.sleep(0)
@@ -243,21 +212,21 @@ class JobQueue:
     async def driver_submit(self, iens):
         print(f"asking the driver to submit {iens=}")
         await asyncio.sleep(0.5)  # Mocking the response time of the cluster
-        self.reals[iens].accept()
+        await self.reals[iens].accept()
 
     async def driver_kill(self, iens):
         if await asyncio.sleep(0.5):  # Mocking the response time of the cluster
-            self.reals[iens].verify_kill()
+            await self.reals[iens].verify_kill()
         else:
-            self.reals[iens].ack_killfailure()
+            await self.reals[iens].ack_killfailure()
 
     async def run_done_callback(self, iens):
         print(f"running done callback for {iens}")
         await asyncio.sleep(0.2)  # slow summary file reading..
         if iens < 1:
-            self.reals[iens].validate()
+            await self.reals[iens].validate()
         else:
-            self.reals[iens].invalidate()  # failed reading summary or something
+            await self.reals[iens].invalidate()  # failed reading summary or something
 
     async def publish_change(self, iens, newstate):
         print(
@@ -266,13 +235,13 @@ class JobQueue:
 
     async def poll(self, time):
         if time == 10:
-            self.reals[0].start()  # mocked driver
-            self.reals[1].start()  # mocked driver
-            self.reals[2].start()  # mocked driver
+            await self.reals[0].start()  # mocked driver
+            await self.reals[1].start()  # mocked driver
+            await self.reals[2].start()  # mocked driver
         if time == 20:
-            self.reals[0].runend()  # mocked driver
-            self.reals[1].runfail()  # mocked driver
-            self.reals[2].runend()  # mocked driver
+            await self.reals[0].runend()  # mocked driver
+            await self.reals[1].runfail()  # mocked driver
+            await self.reals[2].runend()  # mocked driver
 
 
 async def amain():
