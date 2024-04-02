@@ -29,7 +29,7 @@ class MonitorAsync:
         self._id = str(uuid.uuid1()).split("-", maxsplit=1)[0]
         self._event_queue: asyncio.Queue[CloudEvent] = asyncio.Queue()
         self._connection: Optional[WebSocketClientProtocol] = None
-        self._monitor_tasks: List[asyncio.Task[None]] = []
+        self._receiver_task: Optional[asyncio.Task[None]] = None
         self._connected: asyncio.Event = asyncio.Event()
 
     @property
@@ -37,22 +37,22 @@ class MonitorAsync:
         return self._event_queue
 
     async def __aenter__(self) -> "MonitorAsync":
-        self._monitor_tasks = [asyncio.create_task(self._receiver())]
+        self._receiver_task = asyncio.create_task(self._receiver())
         await self._connected.wait()
         return self
 
     async def __aexit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
         if self._connection:
             await self._connection.close()
-        for task in self._monitor_tasks:
-            task.cancel()
-        results = await asyncio.gather(*self._monitor_tasks, return_exceptions=True)
-        for result in results or []:
-            if isinstance(result, (ConnectionClosedOK, asyncio.CancelledError)):
-                continue
-            elif isinstance(result, Exception):
-                logger.error(str(result))
-                raise result
+        if self._receiver_task:
+            if not self._receiver_task.done():
+                self._receiver_task.cancel()
+            try:
+                await self._receiver_task
+            except Exception as exc:
+                if not isinstance(exc, (ConnectionClosedOK, asyncio.CancelledError)):
+                    logger.error(str(exc))
+                    raise exc
 
     def get_base_uri(self) -> str:
         return self._ee_con_info.url
