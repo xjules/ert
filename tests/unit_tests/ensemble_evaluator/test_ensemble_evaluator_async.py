@@ -1,10 +1,15 @@
 import asyncio
+import queue
 from functools import partial
 
 import pytest
 
+from _ert.threading import ErtThread
 from _ert_job_runner.client import Client
+from ert.async_utils import new_event_loop
 from ert.ensemble_evaluator import EnsembleEvaluatorAsync, Snapshot, identifiers
+from ert.ensemble_evaluator.config import EvaluatorServerConfig
+from ert.ensemble_evaluator.monitor import Monitor
 from ert.ensemble_evaluator.monitor_async import MonitorAsync
 from ert.ensemble_evaluator.state import (
     ENSEMBLE_STATE_UNKNOWN,
@@ -13,7 +18,11 @@ from ert.ensemble_evaluator.state import (
     FORWARD_MODEL_STATE_RUNNING,
 )
 
-from .ensemble_evaluator_utils import TestEnsemble, send_dispatch_event_async
+from .ensemble_evaluator_utils import (
+    TestEnsemble,
+    send_dispatch_event,
+    send_dispatch_event_async,
+)
 
 
 @pytest.fixture(name="evaluator_async")
@@ -51,6 +60,133 @@ async def test_when_task_fails_evaluator_raises_exception(
     )
     with pytest.raises(RuntimeError, match=error_msg):
         await evaluator_async.run_and_get_successful_realizations()
+
+
+def start_ee_in_thread(msg_queue):
+    def _ee_start():
+        async def start_ee_async():
+            ensemble = TestEnsemble(0, 2, 2, id_="0")
+            ee = EnsembleEvaluatorAsync(
+                ensemble, EvaluatorServerConfig(custom_port_range=range(1024, 65535)), 0
+            )
+            msg_queue.put(ee)
+            run_task = asyncio.create_task(ee.run_and_get_successful_realizations())
+            await ee._server_started.wait()
+            msg_queue.put("STARTED")
+            await run_task
+            msg_queue.put("FINISHED")
+
+        loop = new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(start_ee_async())
+
+    loop_thread = ErtThread(target=_ee_start)
+    loop_thread.start()
+    return loop_thread
+
+
+def test_xxx_dispatch_endpoint_clients_can_connect_and_monitor_can_shut_down_evaluator():
+
+    msg_queue = queue.Queue()
+
+    ee_thread = start_ee_in_thread(msg_queue)
+    evaluator = msg_queue.get(timeout=3)
+    conn_info = evaluator._config.get_connection_info()
+    msg = msg_queue.get()
+    assert msg == "STARTED"
+    with Monitor(conn_info) as monitor:
+        events = monitor.track()
+        token = evaluator._config.token
+        cert = evaluator._config.cert
+
+        url = evaluator._config.url
+        # first snapshot before any event occurs
+        snapshot_event = next(events)
+        snapshot = Snapshot(snapshot_event.data)
+        assert snapshot.status == ENSEMBLE_STATE_UNKNOWN
+        # two dispatch endpoint clients connect
+        with Client(
+            url + "/dispatch",
+            cert=cert,
+            token=token,
+            max_retries=1,
+            timeout_multiplier=1,
+        ) as dispatch1, Client(
+            url + "/dispatch",
+            cert=cert,
+            token=token,
+            max_retries=1,
+            timeout_multiplier=1,
+        ) as dispatch2:
+            # first dispatch endpoint client informs that job 0 is running
+            send_dispatch_event(
+                dispatch1,
+                identifiers.EVTYPE_FORWARD_MODEL_RUNNING,
+                f"/ert/ensemble/{evaluator.ensemble.id_}/real/0/forward_model/0",
+                "event1",
+                {"current_memory_usage": 1000},
+            )
+
+            # second dispatch endpoint client informs that job 0 is running
+            send_dispatch_event(
+                dispatch2,
+                identifiers.EVTYPE_FORWARD_MODEL_RUNNING,
+                f"/ert/ensemble/{evaluator.ensemble.id_}/real/1/forward_model/0",
+                "event1",
+                {"current_memory_usage": 1000},
+            )
+
+            # second dispatch endpoint client informs that job 0 is done
+            send_dispatch_event(
+                dispatch2,
+                identifiers.EVTYPE_FORWARD_MODEL_SUCCESS,
+                f"/ert/ensemble/{evaluator.ensemble.id_}/real/1/forward_model/0",
+                "event1",
+                {"current_memory_usage": 1000},
+            )
+
+            # second dispatch endpoint client informs that job 1 is failed
+            send_dispatch_event(
+                dispatch2,
+                identifiers.EVTYPE_FORWARD_MODEL_FAILURE,
+                f"/ert/ensemble/{evaluator.ensemble.id_}/real/1/forward_model/1",
+                "event_job_1_fail",
+                {identifiers.ERROR_MSG: "error"},
+            )
+            evt = next(events)
+            snapshot = Snapshot(evt.data)
+            assert snapshot.get_job("1", "0").status == FORWARD_MODEL_STATE_FINISHED
+            assert snapshot.get_job("0", "0").status == FORWARD_MODEL_STATE_RUNNING
+            assert snapshot.get_job("1", "1").status == FORWARD_MODEL_STATE_FAILURE
+
+        # a second monitor connects
+        with Monitor(evaluator._config.get_connection_info()) as monitor2:
+            events2 = monitor2.track()
+            full_snapshot_event = next(events2)
+            assert full_snapshot_event["type"] == identifiers.EVTYPE_EE_SNAPSHOT
+            snapshot = Snapshot(full_snapshot_event.data)
+            assert snapshot.status == ENSEMBLE_STATE_UNKNOWN
+            assert snapshot.get_job("1", "0").status == FORWARD_MODEL_STATE_FINISHED
+            assert snapshot.get_job("0", "0").status == FORWARD_MODEL_STATE_RUNNING
+            assert snapshot.get_job("1", "1").status == FORWARD_MODEL_STATE_FAILURE
+
+            # one monitor requests that server exit
+            monitor.signal_cancel()
+
+            # both monitors should get a terminated event
+            terminated = next(events)
+            terminated2 = next(events2)
+            assert terminated["type"] == identifiers.EVTYPE_EE_TERMINATED
+            assert terminated2["type"] == identifiers.EVTYPE_EE_TERMINATED
+
+            for e in [events, events2]:
+                for undexpected_event in e:
+                    raise AssertionError(
+                        f"got unexpected event {undexpected_event} from monitor"
+                    )
+    msg = msg_queue.get()
+    assert msg == "FINISHED"
+    ee_thread.join()
 
 
 @pytest.mark.asyncio
