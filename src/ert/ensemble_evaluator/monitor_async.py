@@ -27,10 +27,14 @@ class MonitorAsync:
     def __init__(self, ee_con_info: "EvaluatorConnectionInfo") -> None:
         self._ee_con_info = ee_con_info
         self._id = str(uuid.uuid1()).split("-", maxsplit=1)[0]
-        self._msg_gueue: asyncio.Queue[CloudEvent] = asyncio.Queue()
+        self._event_queue: asyncio.Queue[CloudEvent] = asyncio.Queue()
         self._connection: Optional[WebSocketClientProtocol] = None
         self._monitor_tasks: List[asyncio.Task[None]] = []
         self._connected: asyncio.Event = asyncio.Event()
+
+    @property
+    def events(self) -> asyncio.Queue[CloudEvent]:
+        return self._event_queue
 
     async def __aenter__(self) -> "MonitorAsync":
         self._monitor_tasks = [asyncio.create_task(self._receiver())]
@@ -123,11 +127,7 @@ class MonitorAsync:
                 except DataUnmarshallerError:
                     event = from_json(str(message), data_unmarshaller=pickle.loads)
                 print(f"got {event=}")
-                await self._msg_gueue.put(event)
+                await self._event_gueue.put(event)
                 if event["type"] == identifiers.EVTYPE_EE_TERMINATED:
                     logger.debug(f"monitor-{self._id} client received terminated")
                     return
-
-    async def get_event(self) -> CloudEvent:
-        msg = await self._msg_gueue.get()
-        return msg

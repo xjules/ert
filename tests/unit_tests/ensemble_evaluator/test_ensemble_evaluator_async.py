@@ -69,7 +69,7 @@ async def test_dispatch_endpoint_clients_can_connect_and_monitor_can_shut_down_e
         url = evaluator_async._config.url
         # first snapshot before any event occurs
         # snapshot_event = await next(events)
-        snapshot_event = await monitor.get_event()
+        snapshot_event = await monitor.events.get()
         snapshot = Snapshot(snapshot_event.data)
         assert snapshot.status == ENSEMBLE_STATE_UNKNOWN
         # two dispatch endpoint clients connect
@@ -121,7 +121,7 @@ async def test_dispatch_endpoint_clients_can_connect_and_monitor_can_shut_down_e
                 "event_job_1_fail",
                 {identifiers.ERROR_MSG: "error"},
             )
-            evt = await monitor.get_event()
+            evt = await monitor.events.get()
             snapshot = Snapshot(evt.data)
             assert snapshot.get_job("1", "0").status == FORWARD_MODEL_STATE_FINISHED
             assert snapshot.get_job("0", "0").status == FORWARD_MODEL_STATE_RUNNING
@@ -131,7 +131,7 @@ async def test_dispatch_endpoint_clients_can_connect_and_monitor_can_shut_down_e
         async with MonitorAsync(
             evaluator_async._config.get_connection_info()
         ) as monitor2:
-            full_snapshot_event = await monitor2.get_event()
+            full_snapshot_event = await monitor2.events.get()
             assert full_snapshot_event["type"] == identifiers.EVTYPE_EE_SNAPSHOT
             snapshot = Snapshot(full_snapshot_event.data)
             assert snapshot.status == ENSEMBLE_STATE_UNKNOWN
@@ -143,8 +143,8 @@ async def test_dispatch_endpoint_clients_can_connect_and_monitor_can_shut_down_e
             await monitor.signal_cancel()
 
             # both monitors should get a terminated event
-            terminated = await monitor.get_event()
-            terminated2 = await monitor2.get_event()
+            terminated = await monitor.events.get()
+            terminated2 = await monitor2.events.get()
 
             assert terminated["type"] == identifiers.EVTYPE_EE_TERMINATED
             assert terminated2["type"] == identifiers.EVTYPE_EE_TERMINATED
@@ -164,7 +164,7 @@ async def test_ensure_multi_level_events_in_order(evaluator_async):
         cert = evaluator_async._config.cert
         url = evaluator_async._config.url
 
-        snapshot_event = await monitor.get_event()
+        snapshot_event = await monitor.events.get()
         assert snapshot_event["type"] == identifiers.EVTYPE_EE_SNAPSHOT
         async with Client(url + "/dispatch", cert=cert, token=token) as dispatch1:
             await send_dispatch_event_async(
@@ -196,7 +196,7 @@ async def test_ensure_multi_level_events_in_order(evaluator_async):
                 {},
             )
         await monitor.signal_done()
-        event = await monitor.get_event()
+        event = await monitor.events.get()
         assert event["type"] == identifiers.EVTYPE_EE_TERMINATED
         # TODO there is only terminated event? Why?
 
