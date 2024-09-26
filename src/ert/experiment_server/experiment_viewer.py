@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+
 import requests
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, ListView, ListItem, Label, TextArea
 from textual.message import Message
-from textual.reactive import reactive
+from textual.widgets import Footer, Header, Label, ListItem, ListView, TextArea
 
 
 class ExperimentInfo(TextArea):
@@ -53,7 +53,20 @@ class ExperimentBrowser(ListView):
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         # If the user selected a directory entry...
         event.stop()
-        self.post_message(self.ExperimentChanged(id=event.item.experiment.get("id")))
+        msg = self.experiment_info(event.item.experiment.get("id"))
+        txt = ""
+        for v in msg.values():
+            txt += str(v) + ","
+        self.post_message(self.ExperimentChanged(id=txt))
+
+    def experiment_info(self, exp_id: str):
+        print("GET EXP INFO")
+        response = requests.get(
+            self._server_address + "experiments/" + exp_id + "/state"
+        )
+        if response.status_code == 200:
+            items = response.json()
+            return items
 
 
 class ExperimentBrowserApp(App[None]):
