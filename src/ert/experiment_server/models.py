@@ -1,5 +1,5 @@
+from typing import Union
 from uuid import UUID
-from typing import Union, List
 
 from pydantic import BaseModel, Field
 
@@ -22,6 +22,7 @@ from ert.gui.simulation.multiple_data_assimilation_panel import (
 )
 from ert.gui.simulation.single_test_run_panel import Arguments as SingleTestRunArguments
 
+
 class Experiment(BaseModel):
     args: Union[
         EnsembleExperimentArguments,
@@ -34,6 +35,15 @@ class Experiment(BaseModel):
     ] = Field(..., discriminator="mode")
     ert_config: ErtConfig
 
+
 class ExperimentOut(BaseModel):
-   id: UUID
-   type: str
+    id: UUID
+    type: str
+
+
+class ExperimentState(BaseModel):
+    id: UUID
+    type: str
+    state: str
+    duration: int
+    progress: float

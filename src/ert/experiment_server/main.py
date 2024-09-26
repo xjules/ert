@@ -11,7 +11,7 @@ from ert.run_models.model_factory import create_model
 from ert.storage import open_storage
 
 from .experiment_task import EndTaskEvent, ExperimentTask
-from .models import Experiment, ExperimentOut
+from .models import Experiment, ExperimentOut, ExperimentState
 
 experiments: Dict[str, ExperimentTask] = {}
 app = FastAPI()
@@ -55,12 +55,31 @@ async def submit_experiment(experiment: Experiment, background_tasks: Background
 async def cancel_experiment(experiment_id: str):
     if experiment_id not in experiments:
         return HTTPException(
-                status_code=404,
-                detail=f"Experiment with id {experiment_id} does not exist.",
-            )
+            status_code=404,
+            detail=f"Experiment with id {experiment_id} does not exist.",
+        )
     task = experiments[experiment_id]
     task.cancel()
     return ExperimentOut(id=experiment_id, type=task.model_type)
+
+
+@app.get("/experiments/{experiment_id}/state", response_model=ExperimentState)
+async def get_experiment_state(experiment_id: str):
+    task = experiments[experiment_id]
+
+    current_progress = 1.0
+    state = "Done"
+    if task._model is not None:
+        _, current_progress, _ = task._model._current_status()
+        state = task._model._iter_snapshot[0].status
+        runtime = task._model.get_runtime()
+    return ExperimentState(
+        id=experiment_id,
+        type=task.model_type,
+        state=state,
+        duration=runtime,
+        progress=current_progress,
+    )
 
 
 @app.websocket("/experiments/{experiment_id}/events")
