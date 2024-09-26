@@ -68,9 +68,23 @@ async def get_experiment_state(experiment_id: str):
     task = experiments[experiment_id]
 
     if task._model is not None:
-        _, task._current_progress, _ = task._model._current_status()
+        status_map, task._current_progress, _ = task._model._current_status()
         task._state = task._model._iter_snapshot[0].status
         task._runtime = task._model.get_runtime()
+        custom_order = [
+            "Failed",
+            "Finished",
+            "Running",
+            "Pending",
+            "Waiting",
+            "Unknown",
+        ]
+
+        def get_custom_order_index(status):
+            return custom_order.index(status)
+
+        experiment_status = sorted(status_map.keys(), key=get_custom_order_index)
+        task._state = experiment_status[0]
 
     return ExperimentState(
         id=experiment_id,
