@@ -32,10 +32,9 @@ class ExperimentBrowser(ListView):
         )
 
     class ExperimentChanged(Message):
-        def __init__(self, id: str, text: str = "") -> None:
+        def __init__(self, id: str) -> None:
             super().__init__()
             self.id = id
-            self.text = text
 
     def on_mount(self) -> None:
         self._refresh()
@@ -54,7 +53,7 @@ class ExperimentBrowser(ListView):
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         # If the user selected a directory entry...
         event.stop()
-        self.post_message(self.ExperimentChanged(id=event.item))
+        self.post_message(self.ExperimentChanged(id=event.item.experiment.get("id")))
 
 
 class ExperimentBrowserApp(App[None]):
@@ -70,7 +69,7 @@ class ExperimentBrowserApp(App[None]):
         self, event: ExperimentBrowser.ExperimentChanged
     ) -> None:
         self.query_one(ExperimentInfo).clear()
-        self.query_one(ExperimentInfo).insert("some text")
+        self.query_one(ExperimentInfo).insert(event.id)
 
 
 if __name__ == "__main__":
