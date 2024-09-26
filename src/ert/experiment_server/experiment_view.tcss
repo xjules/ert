@@ -1,0 +1,20 @@
+Screen {
+    layout: grid;
+    grid-size: 2 1;
+}
+
+ListView {
+    width: 50;
+    height: auto;
+    margin: 2 2;
+}
+
+TextArea {
+    width: 50;
+    height: auto;
+    margin: 2 2;
+}
+
+Label {
+    padding: 1 2;
+}
