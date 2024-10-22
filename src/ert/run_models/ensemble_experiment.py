@@ -62,8 +62,9 @@ class EnsembleExperiment(BaseRunModel):
         restart: bool = False,
     ) -> None:
         self.log_at_startup()
-        # If design matrix is present, we substitute the experiment parameters
-        # with those in the design matrix
+        # If design matrix is present, we append design matrix parameters
+        # to the experiment parameters and set new active realizations
+        parameters_config = self.ert_config.ensemble_config.parameter_configuration
         if self.ert_config.analysis_config.design_matrix is not None:
             if (
                 self.ert_config.analysis_config.design_matrix.parameter_configuration
@@ -74,11 +75,11 @@ class EnsembleExperiment(BaseRunModel):
                 self.ert_config.analysis_config.design_matrix.parameter_configuration
                 is not None
             )
-            parameters_config = [
+            parameters_config.append(
                 self.ert_config.analysis_config.design_matrix.parameter_configuration[
                     DESIGN_MATRIX_GROUP
                 ]
-            ]
+            )
             assert (
                 self.ert_config.analysis_config.design_matrix.active_realizations
                 is not None
@@ -86,21 +87,10 @@ class EnsembleExperiment(BaseRunModel):
             self.active_realizations = (
                 self.ert_config.analysis_config.design_matrix.active_realizations
             )
+        if not restart:
             self.experiment = self._storage.create_experiment(
                 name=self.experiment_name,
                 parameters=parameters_config,
-                observations=self.ert_config.observations,
-                responses=self.ert_config.ensemble_config.response_configuration,
-            )
-            self.ensemble = self._storage.create_ensemble(
-                self.experiment,
-                name=self.ensemble_name,
-                ensemble_size=self.ensemble_size,
-            )
-        elif not restart:
-            self.experiment = self._storage.create_experiment(
-                name=self.experiment_name,
-                parameters=self.ert_config.ensemble_config.parameter_configuration,
                 observations=self.ert_config.observations,
                 responses=self.ert_config.ensemble_config.response_configuration,
             )
@@ -133,12 +123,11 @@ class EnsembleExperiment(BaseRunModel):
                 self.ensemble,
                 np.where(self.active_realizations)[0],
             )
-        else:
-            sample_prior(
-                self.ensemble,
-                np.where(self.active_realizations)[0],
-                random_seed=self.random_seed,
-            )
+        sample_prior(
+            self.ensemble,
+            np.where(self.active_realizations)[0],
+            random_seed=self.random_seed,
+        )
 
         self._evaluate_and_postprocess(
             run_args,

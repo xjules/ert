@@ -174,7 +174,8 @@ def sample_prior(
     in the case of GEN_KW we sample the data and store it, and if INIT_FILES
     are used without FORWARD_INIT we load files and store them. If FORWARD_INIT
     is set the state is set to INITIALIZED, but no parameters are saved to storage
-    until after the forward model has completed.
+    until after the forward model has completed. If parameters come from the DESIGN_MATRIX_GROUP
+    they are handled separately via save_design_matrix_to_ensemble.
     """
     random_seed = _seed_sequence(random_seed)
     t = time.perf_counter()
@@ -183,7 +184,7 @@ def sample_prior(
         parameters = list(parameter_configs.keys())
     for parameter in parameters:
         config_node = parameter_configs[parameter]
-        if config_node.forward_init:
+        if config_node.forward_init or config_node.name == DESIGN_MATRIX_GROUP:
             continue
         for realization_nr in active_realizations:
             ds = config_node.sample_or_load(
