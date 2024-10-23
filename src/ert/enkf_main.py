@@ -184,7 +184,11 @@ def sample_prior(
         parameters = list(parameter_configs.keys())
     for parameter in parameters:
         config_node = parameter_configs[parameter]
-        if config_node.forward_init or config_node.name == DESIGN_MATRIX_GROUP:
+        if (
+            config_node.forward_init
+            or config_node.name == DESIGN_MATRIX_GROUP
+            or config_node.disabled
+        ):
             continue
         for realization_nr in active_realizations:
             ds = config_node.sample_or_load(
