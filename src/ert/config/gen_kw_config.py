@@ -366,21 +366,6 @@ class GenKwConfig(ParameterConfig):
             if tf.use_log
         }
 
-        # if self.template_file is not None and self.output_file is not None:
-        #     target_file = substitute_runpath_name(
-        #         self.output_file, real_nr, ensemble.iteration
-        #     )
-        #     target_file = target_file.removeprefix("/")
-        #     (run_path / target_file).parent.mkdir(exist_ok=True, parents=True)
-        #     template_file_path = (
-        #         ensemble.experiment.mount_point / Path(self.template_file).name
-        #     )
-        #     with open(template_file_path, encoding="utf-8") as f:
-        #         template = f.read()
-        #     for key, value in data.items():
-        #         template = template.replace(f"<{key}>", f"{value:.6g}")
-        #     with open(run_path / target_file, "w", encoding="utf-8") as f:
-        #         f.write(template)
         if log10_data:
             return {self.name: data, f"LOG10_{self.name}": log10_data}
         else:
@@ -549,14 +534,6 @@ class GenKwConfig(ParameterConfig):
             parameter_list=params,
             calc_func=PRIOR_FUNCTIONS[t.param_name],
         )
-
-    # def save_experiment_data(self, experiment_path: Path) -> None:
-    #     if self.template_file:
-    #         incoming_template_file_path = Path(self.template_file)
-    #         template_file_path = Path(
-    #             experiment_path / incoming_template_file_path.name
-    #         )
-    #         shutil.copyfile(incoming_template_file_path, template_file_path)
 
 
 @dataclass
