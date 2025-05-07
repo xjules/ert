@@ -280,15 +280,17 @@ class GenKwConfig(ParameterConfig):
             real_nr,
         )
 
-        parameter_dict = {}
-        parameter_dict["realization"] = real_nr
-        trasfmored_values = self.transform(parameter_value)
-        for parameter in self.transform_function_definitions:
-            parameter_dict[parameter.name] = parameter_value[keys.index(parameter.name)]
-            parameter_dict[f"{parameter.name}.transformed"] = trasfmored_values[
-                keys.index(parameter.name)
+        transformed_value = self.transform(parameter_value)
+        parameter_dict = {
+            key: value
+            for idx, parameter in enumerate(self.transform_functions)
+            for key, value in [
+                (parameter.name, parameter_value[idx]),
+                (f"{parameter.name}.transformed", transformed_value[idx]),
             ]
-        return pl.DataFrame(parameter_dict, schema_overrides={"realization": pl.Int32})
+        }
+        parameter_dict["realization"] = real_nr
+        return pl.DataFrame(parameter_dict)
 
     def load_parameter_graph(self) -> nx.Graph[int]:
         # Create a graph with no edges
@@ -321,21 +323,10 @@ class GenKwConfig(ParameterConfig):
                 f" is of size {len(self.transform_functions)}, expected {df.width}"
             )
 
-        def parse_value(value: float | int | str) -> float | int | str:
-            if isinstance(value, float | int):
-                return value
-            try:
-                return int(value)
-            except ValueError:
-                try:
-                    return float(value)
-                except ValueError:
-                    return value
-
         data_dict = df.rename(
             {col: col.replace(".transformed", "") for col in df.columns}
         ).to_dict()
-        data = {key: parse_value(value[0]) for key, value in data_dict.items()}
+        data = {key: value[0] for key, value in data_dict.items()}
 
         log10_data: dict[str, float | str] = {
             tf.name: math.log10(data[tf.name])
@@ -354,26 +345,25 @@ class GenKwConfig(ParameterConfig):
         realization: int,
         data: npt.NDArray[np.float64],
     ) -> None:
-        ds = xr.Dataset(
-            {
-                "values": ("names", data),
-                "transformed_values": (
-                    "names",
-                    self.transform(data),
-                ),
-                "names": [e.name for e in self.transform_functions],
-            }
-        )
-        ensemble.save_parameters(self.name, realization, ds)
+        transformed_value = self.transform(data)
+        parameter_dict = {
+            key: value
+            for idx, parameter in enumerate(self.transform_functions)
+            for key, value in [
+                (parameter.name, data[idx]),
+                (f"{parameter.name}.transformed", transformed_value[idx]),
+            ]
+        }
+        parameter_dict["realization"] = realization
+        ensemble.save_parameters_pl(self.name, pl.DataFrame(parameter_dict))
 
     def load_parameters(
         self, ensemble: Ensemble, realizations: npt.NDArray[np.int_]
     ) -> npt.NDArray[np.float64]:
         return (
-            ensemble.load_parameters_pl(self.name, realizations)
-            .select(~pl.col("^.*\\.transformed$"))
+            ensemble.load_parameters_pl(self.name, realizations, all_data=False)
             .to_numpy()
-            .flatten()
+            .T.copy()
         )
 
     def shouldUseLogScale(self, keyword: str) -> bool:
