@@ -266,6 +266,21 @@ class LocalEnsemble(BaseMode):
             ]
         )
 
+    @lru_cache  # noqa: B019
+    def _scalar_exist(self) -> dict[str, list[int]]:
+        genkwn_mask: dict[str, list[int]] = {}
+        for parameter in self.experiment.parameter_configuration.values():
+            if isinstance(parameter, GenKwConfig):
+                genkwn_mask[parameter.name] = []
+                group_path = (
+                    self.mount_point / f"{_escape_filename(parameter.name)}.parquet"
+                )
+                if group_path.exists():
+                    genkwn_mask[parameter.name] = pl.read_parquet(group_path)[
+                        "realization"
+                    ].to_list()
+        return genkwn_mask
+
     def is_initalized(self) -> list[int]:
         """
         Return the realization numbers where all parameters are internalized. In
@@ -277,34 +292,26 @@ class LocalEnsemble(BaseMode):
         exists : list[int]
             Returns the realization numbers with parameters
         """
-        genkwn_mask = set()
-        for i in range(self.ensemble_size):
-            for parameter in self.experiment.parameter_configuration.values():
-                if isinstance(parameter, GenKwConfig):
-                    group_path = (
-                        self.mount_point / f"{_escape_filename(parameter.name)}.parquet"
-                    )
-                    if not group_path.exists():
-                        genkwn_mask.add(i)
-                    else:
-                        df_lazy = pl.scan_parquet(group_path)
-                        if not (
-                            df_lazy.filter(pl.col("realization") == i).fetch(1).height
-                            > 0
-                        ):
-                            genkwn_mask.add(i)
+        self._scalar_exist.cache_clear()
+        genkwn_mask = self._scalar_exist()
         return [
             i
             for i in range(self.ensemble_size)
             if all(
                 (
-                    self._realization_dir(i)
-                    / (_escape_filename(parameter.name) + ".nc")
-                ).exists()
+                    isinstance(parameter, GenKwConfig)
+                    and i in genkwn_mask[parameter.name]
+                )
+                or (
+                    not isinstance(parameter, GenKwConfig)
+                    and not parameter.forward_init
+                    and (
+                        self._realization_dir(i)
+                        / (_escape_filename(parameter.name) + ".nc")
+                    ).exists()
+                )
                 for parameter in self.experiment.parameter_configuration.values()
-                if not parameter.forward_init and not isinstance(parameter, GenKwConfig)
             )
-            and i not in genkwn_mask
         ]
 
     def has_data(self) -> list[int]:
@@ -418,6 +425,7 @@ class LocalEnsemble(BaseMode):
 
     def refresh_ensemble_state(self) -> None:
         self.get_ensemble_state.cache_clear()
+        self._scalar_exist.cache_clear()
         self.get_ensemble_state()
 
     @lru_cache  # noqa: B019
@@ -432,6 +440,7 @@ class LocalEnsemble(BaseMode):
         """
 
         response_configs = self.experiment.response_configuration
+        genkwn_mask = self._scalar_exist()
 
         def _parameters_exist_for_realization(realization: int) -> bool:
             """
@@ -452,8 +461,15 @@ class LocalEnsemble(BaseMode):
                 return True
             path = self._realization_dir(realization)
             return all(
-                (path / (_escape_filename(parameter) + ".nc")).exists()
-                for parameter in self.experiment.parameter_configuration
+                (
+                    isinstance(parameter, GenKwConfig)
+                    and realization in genkwn_mask[parameter.name]
+                )
+                or (
+                    not isinstance(parameter, GenKwConfig)
+                    and (path / (_escape_filename(parameter.name) + ".nc")).exists()
+                )
+                for parameter in self.experiment.parameter_configuration.values()
             )
 
         def _responses_exist_for_realization(
@@ -585,6 +601,7 @@ class LocalEnsemble(BaseMode):
 
         return self._load_dataset(group, realizations)
 
+    @require_write
     def save_parameters_pl(self, group: str, dataset: pl.DataFrame) -> None:
         """
         Save parameters for group and realizations into pl.DataFrame.
@@ -600,7 +617,16 @@ class LocalEnsemble(BaseMode):
             raise ValueError(f"{group} is not registered to the experiment.")
         try:
             df = self.load_parameters_pl(group)
-            df = pl.concat([df, dataset], how="vertical")
+            existing_realizations = df.get_column("realization").unique()
+            new_data = dataset.filter(
+                ~pl.col("realization").is_in(existing_realizations)
+            )
+            if new_data.height > 0:
+                df = pl.concat([df, new_data], how="vertical")
+            else:
+                return
+            # df = pl.concat([df, dataset], how="vertical")
+            # TODO bug when sampling as it samples N*N time
         except KeyError:
             df = dataset
 
@@ -950,10 +976,15 @@ class LocalEnsemble(BaseMode):
         self, realization: int
     ) -> dict[str, RealizationStorageState]:
         path = self._realization_dir(realization)
+        genkw_mask = self._scalar_exist()
+
         return {
-            e: RealizationStorageState.PARAMETERS_LOADED
-            if (path / (_escape_filename(e) + ".nc")).exists()
-            else RealizationStorageState.UNDEFINED
+            e: (
+                RealizationStorageState.PARAMETERS_LOADED
+                if (path / (_escape_filename(e) + ".nc")).exists()
+                or (e in genkw_mask and realization in genkw_mask[e])
+                else RealizationStorageState.UNDEFINED
+            )
             for e in self.experiment.parameter_configuration
         }
 
