@@ -99,7 +99,7 @@ class GenKwConfig(ParameterConfig):
             groups[e.group_name].append(e)
         return groups
 
-    def group_keys(self, group: str) -> list[str]:
+    def _group_keys(self, group: str) -> list[str]:
         """Return the keys of the transform functions in the specified group."""
         return [tf.name for tf in self.group_parameters(group)]
 
@@ -616,6 +616,11 @@ class GenKwConfig(ParameterConfig):
             parameter_list=params,
             calc_func=PRIOR_FUNCTIONS[t.param_name],
         )
+
+    @property
+    def group_to_keys(self) -> dict[str, list[str]]:
+        print("H")
+        return {group: [tf.name for tf in tfs] for group, tfs in self.groups.items()}
 
 
 @dataclass

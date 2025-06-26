@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import operator
 import shutil
 from collections.abc import Generator
 from datetime import datetime
-from functools import cached_property
+from functools import cached_property, reduce
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -335,10 +336,11 @@ class LocalExperiment(BaseMode):
 
     @cached_property
     def parameter_group_to_parameter_keys(self) -> dict[str, list[str]]:
-        return {
-            config.name: config.parameter_keys
-            for config in self.parameter_configuration.values()
-        }
+        return reduce(
+            operator.or_,
+            [config.group_to_keys for config in self.parameter_configuration.values()],
+            {},
+        )
 
     @cached_property
     def response_key_to_observation_key(self) -> dict[str, dict[str, list[str]]]:
