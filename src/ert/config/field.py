@@ -326,6 +326,16 @@ class Field(ParameterConfig):
         )
         return adjust_graph_for_masking(G=parameter_graph, mask=self.mask.flatten())
 
+    def copy_parameters(
+        self,
+        source_ensemble: Ensemble,
+        target_ensemble: Ensemble,
+        realizations: npt.NDArray[np.int_],
+        update_mask: bool = False,
+    ) -> None:
+        if update_mask == self.update:
+            super().copy_parameters(source_ensemble, target_ensemble, realizations)
+
 
 TRANSFORM_FUNCTIONS = {
     "LN": np.log,
