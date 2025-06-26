@@ -56,8 +56,12 @@ class ParameterConfig(ABC):
     @abstractmethod
     def parameter_keys(self) -> list[str]:
         """
-        Returns a list of parameter keys within this parameter group
+        Returns a list of parameter keys within this parameter config
         """
+
+    @property
+    def group_to_keys(self) -> dict[str, list[str]]:
+        return {self.name: []}
 
     @property
     @abstractmethod
@@ -134,7 +138,7 @@ class ParameterConfig(ABC):
     @abstractmethod
     def load_parameter_graph(self) -> nx.Graph[int]:
         """
-        Load the graph encoding Markov properties on the parameter `group`
+        Load the graph encoding Markov properties on the parameter `config`
         Often a neighbourhood graph.
         """
 

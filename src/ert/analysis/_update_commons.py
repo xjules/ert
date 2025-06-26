@@ -54,19 +54,10 @@ def _copy_unupdated_parameters(
         None: The function does not return any value but updates the target file system
             by copying over the parameters.
     """
-    # Identify parameter groups that have not been updated
-    not_updated_parameter_groups = list(
-        set(all_parameter_groups) - set(updated_parameter_groups)
-    )
-
-    # Copy the non-updated parameter groups from source to target
-    # for each active realization
-    for parameter_group in not_updated_parameter_groups:
+    for parameter_group in all_parameter_groups:
         source_ensemble.experiment.parameter_configuration[
             parameter_group
-        ].copy_parameters(source_ensemble, target_ensemble, iens_active_index)
-    if source_ensemble._scalar_config:
-        source_ensemble._scalar_config.copy_parameters(
+        ].copy_parameters(
             source_ensemble, target_ensemble, iens_active_index, update_mask=True
         )
 

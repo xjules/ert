@@ -263,7 +263,7 @@ class LocalEnsemble(BaseMode):
     @cached_property
     def _existing_scalars(self) -> dict[str, list[int]]:
         genkw_mask: dict[str, list[int]] = {}
-        if self._scalar_config:
+        if SCALAR_NAME in self.experiment.parameter_configuration:
             scalar_path = self.mount_point / f"{_escape_filename(SCALAR_NAME)}.parquet"
             if scalar_path.exists():
                 genkw_mask[SCALAR_NAME] = (
@@ -577,21 +577,22 @@ class LocalEnsemble(BaseMode):
         otherwise it will return the raw values.
 
         """
-        group_keys: list[str] | None = None
-        config: ParameterConfig | None = None
-        if group not in self.experiment.parameter_configuration:
-            if self._scalar_config:
-                try:
-                    group_keys = self._scalar_config.group_keys(group)
-                    config = self._scalar_config
-                except KeyError as e:
-                    raise KeyError(
-                        f"{group} is not registered to the experiment."
-                    ) from e
-            else:
-                raise KeyError(f"{group} is not registered to the experiment.")
+        config: ParameterConfig | None = next(
+            (
+                config
+                for config in self.experiment.parameter_configuration.values()
+                if config.name == group or group in config.group_to_keys
+            ),
+            None,
+        )
+        if not config:
+            raise KeyError(f"{group} is not registered to the experiment.")
+
+        if config.name == group:
+            group_keys = config.parameter_keys
         else:
-            config = self.experiment.parameter_configuration[group]
+            group_keys = self.experiment.parameter_group_to_parameter_keys[group]
+
         if isinstance(config, GenKwConfig):
             df_lazy = self._load_parameters_lazy(SCALAR_NAME)
             if group_keys:

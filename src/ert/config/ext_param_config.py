@@ -107,3 +107,7 @@ class ExtParamConfig(ParameterConfig):
 
     def __len__(self) -> int:
         return len(self.input_keys)
+
+    @property
+    def group_to_keys(self) -> dict[str, list[str]]:
+        return {self.name: self.input_keys}
