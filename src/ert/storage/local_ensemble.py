@@ -263,7 +263,7 @@ class LocalEnsemble(BaseMode):
     @cached_property
     def _existing_scalars(self) -> dict[str, list[int]]:
         genkw_mask: dict[str, list[int]] = {}
-        if self._scalar_config:
+        if SCALAR_NAME in self.experiment.parameter_configuration:
             scalar_path = self.mount_point / f"{_escape_filename(SCALAR_NAME)}.parquet"
             if scalar_path.exists():
                 genkw_mask[SCALAR_NAME] = (
