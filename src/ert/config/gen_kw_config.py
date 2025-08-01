@@ -93,6 +93,219 @@ class TransformFunction:
         return self.distribution.model_dump(exclude={"name"})
 
 
+class Scalar(ParameterConfig):
+    type: Literal["scalar"] = "scalar"
+    transform_function_definition: TransformFunctionDefinition
+    _transform_function: TransformFunction = PrivateAttr()
+
+    @model_validator(mode="after")
+    def validate_and_setup_transform_function(self) -> Self:
+        if isinstance(self.transform_function_definition, dict):
+            tf_def = TransformFunctionDefinition(**self.transform_function_definition)
+        else:
+            tf_def = self.transform_function_definition
+        self._transform_function = self._parse_transform_function_definition(tf_def)
+        return self
+
+    @property
+    def transform_function(self) -> TransformFunction:
+        return self._transform_function
+
+    @property
+    def parameter_keys(self) -> list[str]:
+        return [self.transform_function.name]
+
+    @property
+    def metadata(self) -> list[ParameterMetadata]:
+        tf = self.transform_function
+        return [
+            ParameterMetadata(
+                key=f"{self.name}:{tf.name}",
+                transformation=tf.distribution.name.upper(),
+                dimensionality=1,
+                userdata={"data_origin": "SCALAR"},
+            )
+        ]
+
+    def sample_or_load(self, real_nr: int, random_seed: int) -> pl.DataFrame:
+        key = self.transform_function.name
+        parameter_value = self._sample_value(
+            self.name,
+            key,
+            str(random_seed),
+            real_nr,
+        )
+        parameter_dict = {key: parameter_value[0], "realization": real_nr}
+        return pl.DataFrame(
+            parameter_dict,
+            schema={key: pl.Float64, "realization": pl.Int64},
+        )
+
+    def load_parameter_graph(self) -> nx.Graph[int]:
+        graph_independence: nx.Graph[int] = nx.Graph()
+        graph_independence.add_node(0)
+        return graph_independence
+
+    def write_to_runpath(
+        self,
+        run_path: Path,
+        real_nr: int,
+        ensemble: Ensemble,
+    ) -> dict[str, dict[str, float | str]]:
+        df = ensemble.load_parameters(self.name, real_nr, transformed=True).drop(
+            "realization"
+        )
+        assert isinstance(df, pl.DataFrame)
+        if not df.width == 1:
+            raise ValueError(
+                f"The configuration of SCALAR parameter {self.name} has 1 parameter, "
+                f"but ensemble dataset for realization {real_nr} has "
+                f"{df.width} parameters."
+            )
+        data = df.to_dicts()[0]
+        tf = self.transform_function
+        log10_data: dict[str, float | str] = {}
+        if isinstance(
+            tf.distribution, LogNormalSettings | LogUnifSettings
+        ) and isinstance(data[tf.name], (int, float)):
+            log10_data[tf.name] = math.log10(data[tf.name])
+        if log10_data:
+            return {self.name: data, f"LOG10_{self.name}": log10_data}
+        else:
+            return {self.name: data}
+
+    def save_parameters(
+        self,
+        ensemble: Ensemble,
+        realization: int,
+        data: npt.NDArray[np.float64],
+    ) -> None:
+        key = self.transform_function.name
+        parameter_dict = {key: data[0], "realization": realization}
+        ensemble.save_parameters(
+            self.name,
+            realization=None,
+            dataset=pl.DataFrame(
+                parameter_dict,
+                schema={key: pl.Float64, "realization": pl.Int64},
+            ),
+        )
+
+    def load_parameters(
+        self, ensemble: Ensemble, realizations: npt.NDArray[np.int_]
+    ) -> npt.NDArray[np.float64]:
+        return (
+            ensemble.load_parameters(self.name, realizations)
+            .drop("realization")
+            .to_numpy()
+            .T.copy()
+        )
+
+    def copy_parameters(
+        self,
+        source_ensemble: Ensemble,
+        target_ensemble: Ensemble,
+        realizations: npt.NDArray[np.int_],
+    ) -> None:
+        df = source_ensemble.load_parameters(self.name, realizations)
+        target_ensemble.save_parameters(self.name, realization=None, dataset=df)
+
+    def shouldUseLogScale(self, keyword: str) -> bool:
+        tf = self.transform_function
+        if tf.name == keyword:
+            return isinstance(tf.distribution, LogNormalSettings | LogUnifSettings)
+        return False
+
+    def get_priors(self) -> list[PriorDict]:
+        tf = self.transform_function
+        return [
+            {
+                "key": tf.name,
+                "function": tf.distribution.name.upper(),
+                "parameters": {
+                    k.upper(): v for k, v in tf.parameter_list.items() if k != "name"
+                },
+            }
+        ]
+
+    def transform(self, array: npt.ArrayLike) -> npt.NDArray[np.float64]:
+        array = np.array(array)
+        array[0] = self.transform_function.distribution.transform(array[0])
+        return array
+
+    def transform_col(self, param_name: str) -> Callable[[float], float]:
+        tf = self.transform_function
+        assert tf.name == param_name, f"Transform function {param_name} not found"
+        return tf.distribution.transform
+
+    @staticmethod
+    def _values_from_file(file_name: str, keys: list[str]) -> npt.NDArray[np.double]:
+        df = pd.read_csv(file_name, sep=r"\s+", header=None)
+        if df.shape[1] == 2:
+            df = df.set_index(df.columns[0])
+            return df.reindex(keys).values.flatten()
+        if not np.issubdtype(df.values.dtype, np.number):
+            raise ValueError(
+                f"The file {file_name} did not contain numbers, got {df.values.dtype}"
+            )
+        return df.values.flatten()
+
+    @staticmethod
+    def _sample_value(
+        parameter_group_name: str,
+        key: str,
+        global_seed: str,
+        realization: int,
+    ) -> npt.NDArray[np.double]:
+        parameter_values = []
+        key_hash = sha256(
+            global_seed.encode("utf-8") + f"{parameter_group_name}:{key}".encode()
+        )
+        seed = np.frombuffer(key_hash.digest(), dtype="uint32")
+        rng = np.random.default_rng(seed)
+        rng.standard_normal(realization)
+        value = rng.standard_normal(1)
+        parameter_values.append(value[0])
+        return np.array(parameter_values)
+
+    def _parse_transform_function_definition(
+        self,
+        t: TransformFunctionDefinition,
+    ) -> TransformFunction:
+        if t.param_name not in DISTRIBUTION_CLASSES:
+            raise ConfigValidationError(
+                f"Unknown distribution provided: {t.param_name}, for variable {t.name}",
+                self.name,
+            )
+        cls = DISTRIBUTION_CLASSES[t.param_name]
+        if len(t.values) != len(cls.get_param_names()):
+            raise ConfigValidationError.with_context(
+                f"Incorrect number of values: {t.values}, provided for variable "
+                f"{t.name} with distribution {t.param_name}.",
+                self.name,
+            )
+        param_floats = []
+        for p in t.values:
+            try:
+                param_floats.append(float(p))
+            except ValueError as e:
+                raise ConfigValidationError.with_context(
+                    f"Unable to convert '{p}' to float number for variable "
+                    f"{t.name} with distribution {t.param_name}.",
+                    self.name,
+                ) from e
+        try:
+            dist = get_distribution(t.param_name, param_floats)
+        except ValidationError as e:
+            error_to_raise = ConfigValidationError.from_pydantic(
+                error=e, context=self.name
+            )
+            for error_info in error_to_raise.errors:
+                error_info.message += f" parameter {t.name}"
+            raise error_to_raise from e
+        return TransformFunction(name=t.name, distribution=dist)
+
+
 class GenKwConfig(ParameterConfig):
     type: Literal["gen_kw"] = "gen_kw"
     transform_function_definitions: list[TransformFunctionDefinition]
