@@ -4,29 +4,19 @@ import os
 from collections.abc import Callable, Iterator
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Literal, Self, cast, overload
+from typing import TYPE_CHECKING, Literal, Self, cast, overload
 
 import networkx as nx
 import numpy as np
 import polars as pl
 import xarray as xr
-from pydantic import Field, ValidationError
+from pydantic import ValidationError
 from typing_extensions import TypedDict
 
 from ._str_to_bool import str_to_bool
 from .distribution import (
     DISTRIBUTION_CLASSES,
-    ConstSettings,
-    DerrfSettings,
-    DUnifSettings,
-    ErrfSettings,
-    LogNormalSettings,
-    LogUnifSettings,
-    NormalSettings,
-    RawSettings,
-    TriangularSettings,
-    TruncNormalSettings,
-    UnifSettings,
+    DistributionSettings,
     get_distribution,
 )
 from .parameter_config import ParameterCardinality, ParameterConfig, ParameterMetadata
@@ -67,20 +57,7 @@ class DataSource(StrEnum):
 
 class GenKwConfig(ParameterConfig):
     type: Literal["gen_kw"] = "gen_kw"
-    distribution: Annotated[
-        UnifSettings
-        | LogNormalSettings
-        | LogUnifSettings
-        | DUnifSettings
-        | RawSettings
-        | ConstSettings
-        | NormalSettings
-        | TruncNormalSettings
-        | ErrfSettings
-        | DerrfSettings
-        | TriangularSettings,
-        Field(discriminator="name"),
-    ]
+    distribution: DistributionSettings
     forward_init: bool = False
     update: bool = True
     group: str = "DEFAULT"
@@ -311,19 +288,7 @@ class GenKwConfig(ParameterConfig):
     @classmethod
     def _parse_distribution(
         cls, param_name: str, dist_name: str, values: list[str]
-    ) -> (
-        UnifSettings
-        | LogNormalSettings
-        | LogUnifSettings
-        | DUnifSettings
-        | RawSettings
-        | ConstSettings
-        | NormalSettings
-        | TruncNormalSettings
-        | ErrfSettings
-        | DerrfSettings
-        | TriangularSettings
-    ):
+    ) -> DistributionSettings:
         if dist_name not in DISTRIBUTION_CLASSES:
             raise ConfigValidationError(
                 f"Unknown distribution provided: {dist_name}"
