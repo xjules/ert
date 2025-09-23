@@ -27,9 +27,12 @@ def create_priors(
 
     for param in experiment.parameter_configuration.values():
         if isinstance(param, GenKwConfig):
+            dist_dict = param.distribution.model_dump(mode="json")
+            dist_dict.pop("name", None)
+
             prior: dict[str, str | float] = {
                 "function": _PRIOR_NAME_MAP[param.distribution.name.upper()],
-            }
+            } | dist_dict
             priors_dict[f"{param.group}:{param.name}"] = prior
 
     return priors_dict
