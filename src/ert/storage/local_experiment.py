@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import shutil
-from collections import defaultdict
 from collections.abc import Generator
 from datetime import datetime
 from functools import cached_property
@@ -26,7 +25,6 @@ from ert.config import (
     SurfaceConfig,
 )
 from ert.config import Field as FieldConfig
-from ert.config.parameter_config import ParameterCardinality
 from ert.config.parsing.context_values import ContextBoolEncoder
 
 from .mode import BaseMode, Mode, require_write
@@ -386,23 +384,6 @@ class LocalExperiment(BaseMode):
             keys += config.parameter_keys
 
         return keys
-
-    @cached_property
-    def param_groups(self) -> dict[str, list[str]]:
-        dict_param: dict[str, list[str]] = defaultdict(list)
-        for p in self.parameter_configuration.values():
-            dict_param[p.group_name].append(p.name)
-        return dict_param
-
-    @cached_property
-    def param_cardinality(self) -> dict[str, ParameterCardinality]:
-        return {
-            p.name: p.data_cardinality for p in self.parameter_configuration.values()
-        } | {
-            p.group_name: ParameterCardinality.multiple_configs_per_ensemble_dataset
-            for p in self.parameter_configuration.values()
-            if p.name != p.group_name
-        }
 
     @cached_property
     def parameter_group_to_parameter_keys(self) -> dict[str, list[str]]:

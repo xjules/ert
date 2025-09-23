@@ -260,9 +260,9 @@ class LocalEnsemble(BaseMode):
     def _existing_scalars(self) -> dict[str, list[int]]:
         group_path = self.mount_point / f"{_escape_filename(SCALAR_FILENAME)}.parquet"
         genkw_mask: dict[str, list[int]] = {
-            param: []
-            for param in self.experiment.parameter_configuration
-            if self.experiment.param_cardinality[param]
+            param_name: []
+            for param_name, param in self.experiment.parameter_configuration.items()
+            if param.data_cardinality
             == ParameterCardinality.one_param_config_per_ensemble_dataset
         }
         if not group_path.exists():
@@ -597,21 +597,21 @@ class LocalEnsemble(BaseMode):
         otherwise it will return the raw values.
 
         """
-        if group not in self.experiment.param_cardinality:
+        cfgs = [
+            p
+            for p in self.experiment.parameter_configuration.values()
+            if group in {p.name, p.group_name}
+        ]
+
+        if not cfgs:
             raise KeyError(f"{group} is not registered to the experiment.")
 
-        if (
-            self.experiment.param_cardinality[group]
-            == ParameterCardinality.multiple_configs_per_ensemble_dataset
-        ):
-            return self._load_scalar_keys(
-                self.experiment.param_groups[group], realizations, transformed
-            )
-        elif (
-            self.experiment.param_cardinality[group]
-            == ParameterCardinality.one_param_config_per_ensemble_dataset
-        ):
-            return self._load_scalar_keys([group], realizations, transformed)
+        # if group refers to genkw group name, we expect same cardinality
+        cardinality = next(cfg.data_cardinality for cfg in cfgs)
+        keys = [cfg.name for cfg in cfgs]
+
+        if cardinality == ParameterCardinality.one_param_config_per_ensemble_dataset:
+            return self._load_scalar_keys(keys, realizations, transformed)
         return self._load_dataset(
             group,
             (
@@ -624,14 +624,16 @@ class LocalEnsemble(BaseMode):
     def load_parameters_numpy(
         self, group: str, realizations: npt.NDArray[np.int_]
     ) -> npt.NDArray[np.float64]:
-        if (
-            self.experiment.param_cardinality[group]
-            == ParameterCardinality.multiple_configs_per_ensemble_dataset
-        ):
+        keys = [
+            p.name
+            for p in self.experiment.parameter_configuration.values()
+            if group == p.group_name
+            and p.data_cardinality
+            == ParameterCardinality.one_param_config_per_ensemble_dataset
+        ]
+        if keys:
             return (
-                self._load_scalar_keys(
-                    self.experiment.param_groups[group], realizations
-                )
+                self._load_scalar_keys(keys, realizations)
                 .drop("realization")
                 .to_numpy()
                 .T.copy()
@@ -660,12 +662,8 @@ class LocalEnsemble(BaseMode):
             for p in self.experiment.parameter_configuration.values()
             if p.data_cardinality
             == ParameterCardinality.one_param_config_per_ensemble_dataset
+            and (group is None or p.group_name == group)
         ]
-        if group and group in self.experiment.param_groups:
-            gen_kws = [
-                self.experiment.parameter_configuration[key]
-                for key in self.experiment.param_groups[group]
-            ]
 
         for config in gen_kws:
             df = self.load_parameters(config.name, realizations, transformed=True)
