@@ -8,7 +8,7 @@ title: Sumo authentication and authorization, and ERT
 # Sumo: authentication and authorization
 
 - `fmu-dataio`
-- `fmu-sumo-uploader` 
+- `fmu-sumo-uploader`
 - `sumo-wrapper-python`
 
 ---
@@ -47,74 +47,41 @@ ERT  ──runs──▶  SUMO_UPLOAD (fmu-sumo-uploader)
   - `sumo-wrapper-python/src/sumo/wrapper/_auth_provider.py`
 ---
 
-## This happens
-
-In the ERT config:
+## FW model:
 
 ```
 FORWARD_MODEL SUMO_UPLOAD
 ```
 
-1. **Plugin hook**: `fmu-sumo-uploader` registers the step through the
+- `fmu-sumo-uploader` registers the step through the
    `installable_forward_model_steps` hook (entry point
    `fmu_sumo_uploader_jobs`). ERT finds it at startup when the package
    is installed, so the config needs no job definition.
-2. **Command template**: the step expands to
 
-   ```
-   sumo_upload <SUMO_CASEPATH> --config_path <SUMO_CONFIG_PATH> --sumo_mode <SUMO_MODE>
-   ```
+- the `sumo_upload` command connects to Sumo, finds the files exported by `fmu-dataio` and uploads them.
 
-3. **Defaults**: `<SUMO_CONFIG_PATH>` is `fmuconfig/output/global_variables.yml`
-   and `<SUMO_MODE>` is `copy`.
-4. **`<SUMO_CASEPATH>` has no default**: it comes from the config, e.g.
-   `DEFINE <SUMO_CASEPATH> <SCRATCH>/<USER>/<CASE_DIR>`.
-5. **Pre-experiment check**: `SUMO_ENV` must be `preview`, `dev`, `test`
-   or `prod`.
-6. **Run**: the `sumo_upload` command connects to Sumo (authentication,
-   see next slides), finds the files exported by `fmu-dataio`, and
-   uploads them. Errors are logged, they do not fail the ERT run.
-
-The case must already be registered, normally by the hook workflow
+- The case must already be registered, normally by the hook workflow
 `WF_CREATE_CASE_METADATA <SUMO_CASEPATH> "--sumo"` in `PRE_SIMULATION`.
 
 ---
 
 ## Where the token comes from
 
-`get_auth_provider` uses the first method that works:
+The wrapper tries these in order and uses the first that works:
 
-1. Refresh token (`token=`, not a JWT)
-2. Access token (`token=`, a JWT). Used by CI.
-3. Case shared key file in `~/.sumo`
-4. Cached MSAL token in `~/.sumo`
-5. Managed / workload identity (`AZURE_FEDERATED_TOKEN_FILE`, ...)
-6. Interactive browser login (default, 5 minute timeout)
-7. Fallback key
-8. Otherwise: "No valid authorization provider found."
+1. A token passed in directly (e.g. CI)
+2. A saved login or case key in `~/.sumo`
+3. A managed identity (Azure services)
+4. Interactive browser login
 
 ---
 
-## Token cache in `~/.sumo`
-
-- First login is interactive, in a browser, with your Equinor account.
-- MSAL stores the token (with refresh token) in `~/.sumo/<resource>.token`.
-- Later runs refresh silently, with no browser.
-- Linux: plain file, mode `0600`. Windows and Mac: encrypted.
-- The home directory is usually shared (NFS), so cluster nodes see the
-  same cache. The code retries on NFS errors (`EAGAIN`, `ESTALE`).
-
----
-
-## What is sent to Sumo
+## What is then sent to Sumo
 
 | Credential                  | Header                        | Used for                       |
 | --------------------------- | ----------------------------- | ------------------------------ |
 | Entra ID access token (JWT) | `Authorization: Bearer ...` | User or service identity calls |
 | Case shared key (SAS-like)  | `X-SUMO-Token: ...`         | Access to a single case        |
-
-- The wrapper decodes the JWT without verifying the signature, only to
-  read `exp` and `aud`. The Sumo API validates the token.
 
 ---
 
@@ -126,17 +93,11 @@ Many realizations upload in parallel, and each cannot do its own login.
    `create_shared_access_key_for_case(case_uuid)`.
 2. The key is stored as `~/.sumo/<resource>+<case>.sharedkey`.
 3. `client_for_case(case_uuid)` returns a client that uses it.
-4. Expired keys are removed by `cleanup_shared_keys`.
 
-If creating the key fails, the uploader only logs a warning and
-continues with the normal token.
-
-File bytes are uploaded to blob storage with a separate SAS URL
-issued per object.
 
 ---
 
-## How this relates to ERT
+## SUMO_UPLOAD
 
 - ERT runs `SUMO_UPLOAD` as a `FORWARD_MODEL` or a workflow job:
 
@@ -152,42 +113,3 @@ issued per object.
   They rely on the cached login in `~/.sumo` (or a managed identity).
 - ERT passes no credentials. It only provides the environment, for
   example `SUMO_ENV`.
-
----
-
-## Practical advice for ERT users
-
-- Log in **before** starting ERT, from a node with a browser, so that
-  `~/.sumo` is populated:
-
-  ```
-  sumo_login -e prod
-  ```
-
-  (`sumo_login --uploader` uses the uploader's app registration.)
-- Do not rely on an interactive login inside a forward model.
-  Compute nodes have no browser, and the login times out.
-- Set `SUMO_ENV` explicitly when targeting `dev` or `test`.
-- Treat `~/.sumo` as secret. Do not copy it or commit it.
-
----
-
-## Troubleshooting
-
-- "No valid authorization provider found": no cached login. Run the
-  login command and retry.
-- Expired access token: you passed `token=` that has expired. Get a new one.
-- Case upload fails but login works: check that
-  `WF_CREATE_CASE_METADATA` ran first.
-- Login works on one machine but not on another: check that the
-  home directory (`~/.sumo`) is shared and readable.
-
----
-
-## Summary
-
-- Entra ID proves who you are. MSAL gets and caches the token.
-- Sumo decides what you may access.
-- Cached login in `~/.sumo` makes non-interactive ERT runs possible.
-- Case-scoped keys handle parallel uploads.
-- ERT stays out of auth: it just runs the jobs as you.
