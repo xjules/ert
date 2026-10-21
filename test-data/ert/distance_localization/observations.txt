@@ -1,0 +1,38 @@
+SUMMARY_OBSERVATION WOPR_OP1
+{
+    KEY   = WOPR:OP1;
+    VALUE = 0.6;
+    ERROR = 0.1;
+    DATE  = 2020-01-01;
+    LOCALIZATION {
+        EAST   = 10.5;
+        NORTH  = 10.5;
+        RADIUS = 4.0;
+    };
+};
+
+SUMMARY_OBSERVATION WOPR_OP2
+{
+    KEY   = WOPR:OP2;
+    VALUE = -0.6;
+    ERROR = 0.1;
+    DATE  = 2020-01-01;
+    LOCALIZATION {
+        EAST   = 29.5;
+        NORTH  = 15.5;
+        RADIUS = 4.0;
+    };
+};
+
+SUMMARY_OBSERVATION WOPR_OP3
+{
+    KEY   = WOPR:OP3;
+    VALUE = 0.5;
+    ERROR = 0.1;
+    DATE  = 2020-01-01;
+    LOCALIZATION {
+        EAST   = 15.5;
+        NORTH  = 30.5;
+        RADIUS = 4.0;
+    };
+};

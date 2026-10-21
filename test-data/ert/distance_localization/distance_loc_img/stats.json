@@ -1,0 +1,29 @@
+[
+  {
+    "strategy": "GLOBAL",
+    "cells_updated": 1600,
+    "dmean_near": 0.35883405804634094,
+    "dmean_far": 0.35883408784866333,
+    "std_ratio_near": 0.061311274766922,
+    "std_ratio_far": 0.06131128966808319,
+    "obs_rmse": 0.5696460604667664
+  },
+  {
+    "strategy": "ADAPTIVE",
+    "cells_updated": 1600,
+    "dmean_near": 0.35883405804634094,
+    "dmean_far": 0.35883408784866333,
+    "std_ratio_near": 0.061311274766922,
+    "std_ratio_far": 0.06131128966808319,
+    "obs_rmse": 0.5696460604667664
+  },
+  {
+    "strategy": "DISTANCE",
+    "cells_updated": 579,
+    "dmean_near": 0.08121535181999207,
+    "dmean_far": 0.0,
+    "std_ratio_near": 0.8611865043640137,
+    "std_ratio_far": 1.0,
+    "obs_rmse": 0.14741136133670807
+  }
+]
