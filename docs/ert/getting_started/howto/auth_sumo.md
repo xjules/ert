@@ -2,13 +2,14 @@
 marp: true
 theme: default
 paginate: true
+class: invert
 title: Sumo authentication and authorization, and ERT
 ---
+# Sumo: authentication and authorization
 
-# Sumo authentication and authorization
-
-How `fmu-sumo-uploader` and `sumo-wrapper-python` log in to Sumo,
-and what that means for ERT runs
+- `fmu-dataio`
+- `fmu-sumo-uploader` 
+- `sumo-wrapper-python`
 
 ---
 
@@ -23,16 +24,16 @@ ERT  ──runs──▶  SUMO_UPLOAD (fmu-sumo-uploader)
 
 - **fmu-dataio**: writes data and metadata. No auth code.
 - **fmu-sumo-uploader**: uploads to Sumo. Delegates all auth to the wrapper.
-- **ERT**: only orchestrates. It has no dependency on Sumo or Entra ID.
+- **sumo-wrapper-python**: auth code
 
 ---
 
 ## Authentication vs authorization
 
-- **Authentication**: who are you? Done by **Entra ID** (formerly Azure AD).
+- **Authentication**: who are you? Done by **Entra ID** (ex. Azure AD).
 - **Authorization**: what may you do? Decided by the **Sumo API**
   from the identity in the token.
-- The wrapper only obtains and sends credentials. It does not
+  - **sumo-wrapper-python** only obtains and sends credentials. It does not
   implement access rules.
 
 ---
@@ -40,28 +41,42 @@ ERT  ──runs──▶  SUMO_UPLOAD (fmu-sumo-uploader)
 ## Entra ID and MSAL
 
 - **Entra ID**: Microsoft's identity service. Holds users, service
-  identities and app registrations. Issues signed tokens.
+  identities and app registrations and issues signed tokens.
 - **MSAL**: the Python library (`import msal`) that runs the login
   flows and caches tokens.
-- **App registration / client ID**: identifies the *program* asking for
-  a token. The uploader has its own (`a65dc4cc-...`).
-- Public client: **no client secret** in the code.
-- **Scope**: `<resource_id>/.default`, meaning "call the Sumo API".
-
+  - `sumo-wrapper-python/src/sumo/wrapper/_auth_provider.py`
 ---
 
-## Discovery
+## This happens
 
-`SumoClient(env="prod")` first fetches
-`https://api.sumo.equinor.com/well-known` (override: `SUMOCONNECTIONINFO`).
+In the ERT config:
 
-It returns:
+```
+FORWARD_MODEL SUMO_UPLOAD
+```
 
-- tenant ID and authority host
-- per environment (`dev`, `test`, `prod`, ...): `resource_id`,
-  `base_url`, default `client_id`
+1. **Plugin hook**: `fmu-sumo-uploader` registers the step through the
+   `installable_forward_model_steps` hook (entry point
+   `fmu_sumo_uploader_jobs`). ERT finds it at startup when the package
+   is installed, so the config needs no job definition.
+2. **Command template**: the step expands to
 
-The uploader picks the environment from `SUMO_ENV` (default `prod`).
+   ```
+   sumo_upload <SUMO_CASEPATH> --config_path <SUMO_CONFIG_PATH> --sumo_mode <SUMO_MODE>
+   ```
+
+3. **Defaults**: `<SUMO_CONFIG_PATH>` is `fmuconfig/output/global_variables.yml`
+   and `<SUMO_MODE>` is `copy`.
+4. **`<SUMO_CASEPATH>` has no default**: it comes from the config, e.g.
+   `DEFINE <SUMO_CASEPATH> <SCRATCH>/<USER>/<CASE_DIR>`.
+5. **Pre-experiment check**: `SUMO_ENV` must be `preview`, `dev`, `test`
+   or `prod`.
+6. **Run**: the `sumo_upload` command connects to Sumo (authentication,
+   see next slides), finds the files exported by `fmu-dataio`, and
+   uploads them. Errors are logged, they do not fail the ERT run.
+
+The case must already be registered, normally by the hook workflow
+`WF_CREATE_CASE_METADATA <SUMO_CASEPATH> "--sumo"` in `PRE_SIMULATION`.
 
 ---
 
@@ -93,10 +108,10 @@ The uploader picks the environment from `SUMO_ENV` (default `prod`).
 
 ## What is sent to Sumo
 
-| Credential | Header | Used for |
-|---|---|---|
+| Credential                  | Header                        | Used for                       |
+| --------------------------- | ----------------------------- | ------------------------------ |
 | Entra ID access token (JWT) | `Authorization: Bearer ...` | User or service identity calls |
-| Case shared key (SAS-like) | `X-SUMO-Token: ...` | Access to a single case |
+| Case shared key (SAS-like)  | `X-SUMO-Token: ...`         | Access to a single case        |
 
 - The wrapper decodes the JWT without verifying the signature, only to
   read `exp` and `aud`. The Sumo API validates the token.
@@ -133,7 +148,6 @@ issued per object.
   WF_CREATE_CASE_METADATA   -- registers the case, run first
   SUMO_UPLOAD <SUMO_CASEPATH>
   ```
-
 - Forward models run on compute nodes **as your user**, non-interactively.
   They rely on the cached login in `~/.sumo` (or a managed identity).
 - ERT passes no credentials. It only provides the environment, for
