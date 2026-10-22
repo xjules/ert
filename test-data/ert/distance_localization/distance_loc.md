@@ -43,7 +43,7 @@ $$\rho_{ij} = \mathrm{GC}\!\left(\frac{d_{ij}}{r_j}\right), \qquad d_{ij} = \lVe
 
 ---
 
-# localization
+# Localization strategies
 
 | Strategy | $\rho_{ij}$ |
 |---|---|
@@ -51,81 +51,35 @@ $$\rho_{ij} = \mathrm{GC}\!\left(\frac{d_{ij}}{r_j}\right), \qquad d_{ij} = \lVe
 | `ADAPTIVE` | $1$ if $\lvert\mathrm{corr}(x_i, y_j)\rvert$ exceeds a significance threshold, else $0$ |
 | `DISTANCE` | $\mathrm{GC}(d_{ij}/r_j)$ |
 
----
-
-# 101 example
-
-ES-MDA on a uniform prior field, three update strategies
-
-- `FIELD` update strategy: `GLOBAL`, `ADAPTIVE`, `DISTANCE`
-
-![w:1000px](image.png)
 
 ---
 
-# Setup
+# Example Setup
+
+![w:300px](image-6.png)
 
 - 40 x 40 grid, 1 m cells, one `FIELD` parameter `PORO`
 - Prior: spatially uniform per realization, value ~ N(0, 1), 50 realizations
 - Three wells; response = mean `PORO` of the 3 x 3 cells around the well
 - Observations values OP1 = 0.6, OP2 = -0.6, OP3 = 0.5 and error = 0.1 and radius = 4
 
-```
-ANALYSIS_SET_VAR PARAMETERS FIELD GLOBAL | ADAPTIVE | DISTANCE
-```
+---
+
+# Global / Adaptive localization
+
+![w:400px](image-7.png)
+
+- They give identical results since every parameter (voxel) is correlated with every response
+- The ensemble collapses onto one value
 
 
 ---
 
-# Posterior mean of PORO
+# Distance localization update
 
-![w:1100](distance_loc_img/posterior_mean.png)
+![w:600px](image-4.png)
 
-Red dots: observations. Dotted circles: `2 x RADIUS`, where influence reaches zero.
 
----
-
-# Change in ensemble mean
-
-![w:1100](distance_loc_img/mean_change.png)
-
-`GLOBAL` and `ADAPTIVE` shift the whole field. `DISTANCE` only changes cells around the wells.
-
----
-
-# Ensemble spread
-
-![w:1100](distance_loc_img/std_ratio.png)
-
-- `GLOBAL` and `ADAPTIVE`: spread collapses everywhere (ratio ~0.06)
-- `DISTANCE`: spread reduced near the wells, unchanged (1.0) elsewhere
-
----
-
-# Fit to observations
-
-![w:1100](distance_loc_img/responses.png)
-
----
-
-# Summary of results
-
-| Strategy | Cells updated | Mean change, near wells | Mean change, far | Std ratio, near | Std ratio, far | Obs. RMSE |
-|---|---|---|---|---|---|---|
-| GLOBAL | 1600 / 1600 | 0.36 | 0.36 | 0.06 | 0.06 | 0.57 |
-| ADAPTIVE | 1600 / 1600 | 0.36 | 0.36 | 0.06 | 0.06 | 0.57 |
-| DISTANCE | 579 / 1600 | 0.08 | 0.00 | 0.86 | 1.00 | 0.15 |
-
-Near = within `2 x RADIUS` of a well. Obs. RMSE: posterior mean response vs observed value.
-
----
-
-# Takeaways
-
-- `GLOBAL` and `ADAPTIVE` give identical results here: every cell is perfectly correlated with every response, so adaptive localization removes nothing.
-- The ensemble collapses onto one value that fits no well.
-- `DISTANCE` lets each well update only its own neighbourhood, so all three observations are matched and the rest of the field keeps its prior.
-- Requirements: a `LOCALIZATION` block on observations and `FIELD DISTANCE`.
 
 ---
 
